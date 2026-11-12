@@ -1,0 +1,23 @@
+package com.localllm.locie.chat;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
+
+public interface ChatRepository extends JpaRepository<Chat, UUID> {
+
+    List<Chat> findByArchivedFalseOrderByPinnedDescUpdatedAtDesc();
+
+    List<Chat> findByArchivedFalseAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(String query);
+
+    /** Bumps the chat's last-activity stamp so the sidebar ordering reflects new messages. */
+    @Modifying
+    @Transactional
+    @Query("update Chat c set c.updatedAt = :now where c.id = :id")
+    void touch(@Param("id") UUID id, @Param("now") Instant now);
+}

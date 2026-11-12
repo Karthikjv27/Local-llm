@@ -1,0 +1,16 @@
+package com.localllm.locie.chat;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
+public record ChatDetail(
+        UUID id,
+        String title,
+        String model,
+        String systemPrompt,
+        boolean pinned,
+        Instant createdAt,
+        Instant updatedAt,
+        List<MessageView> messages) {
+}
