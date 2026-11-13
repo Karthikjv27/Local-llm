@@ -3,9 +3,11 @@ import { api } from './api/client'
 import type { ChatDetail, ChatSummary, ModelView } from './api/types'
 import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
+import { MetricsPanel } from './components/MetricsPanel'
 import { ModelPicker } from './components/ModelPicker'
 import { Sidebar } from './components/Sidebar'
 import { useChatStream } from './hooks/useChatStream'
+import { useMetrics } from './hooks/useMetrics'
 
 const PREFERRED_MODEL = 'qwen2.5-coder:3b'
 const MODELS_REFRESH_MS = 10_000
@@ -17,8 +19,10 @@ export default function App() {
   const [detail, setDetail] = useState<ChatDetail | null>(null)
   const [query, setQuery] = useState('')
   const [banner, setBanner] = useState<string | null>(null)
+  const [showMetrics, setShowMetrics] = useState(true)
 
   const { streaming, text, error, send, stop, dismissError } = useChatStream()
+  const { metrics, history } = useMetrics()
 
   const loadModels = useCallback(async () => {
     try {
@@ -175,7 +179,18 @@ export default function App() {
             onChange={changeModel}
           />
           <span className="truncate text-xs text-zinc-500">{detail?.title ?? 'No chat selected'}</span>
-          {streaming && <span className="ml-auto shrink-0 text-[11px] text-emerald-400">generating…</span>}
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {streaming && <span className="text-[11px] text-emerald-400">generating…</span>}
+            {!showMetrics && (
+              <button
+                type="button"
+                onClick={() => setShowMetrics(true)}
+                className="rounded border border-zinc-800 px-2 py-1 text-[11px] text-zinc-400 transition hover:text-zinc-200"
+              >
+                Metrics
+              </button>
+            )}
+          </div>
         </header>
 
         {problem && (
@@ -198,6 +213,10 @@ export default function App() {
 
         <Composer disabled={!detail} streaming={streaming} onSend={sendMessage} onStop={stop} />
       </main>
+
+      {showMetrics && (
+        <MetricsPanel metrics={metrics} history={history} onClose={() => setShowMetrics(false)} />
+      )}
     </div>
   )
 }

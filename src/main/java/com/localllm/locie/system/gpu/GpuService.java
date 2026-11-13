@@ -16,6 +16,8 @@ public class GpuService {
 
     private final List<GpuProbe> probes;
 
+    private final Object refreshLock = new Object();
+
     private volatile GpuSnapshot cached;
     private volatile long cachedAt;
 
@@ -24,15 +26,23 @@ public class GpuService {
     }
 
     public GpuSnapshot current() {
-        long now = System.currentTimeMillis();
-        GpuSnapshot snapshot = cached;
-        if (snapshot != null && now - cachedAt < TTL.toMillis()) {
-            return snapshot;
+        if (isFresh(cached)) {
+            return cached;
         }
-        GpuSnapshot fresh = probe();
-        cached = fresh;
-        cachedAt = now;
-        return fresh;
+        // one probe run at a time: overlapping polls must not spawn parallel PowerShell processes
+        synchronized (refreshLock) {
+            if (isFresh(cached)) {
+                return cached;
+            }
+            GpuSnapshot fresh = probe();
+            cached = fresh;
+            cachedAt = System.currentTimeMillis();
+            return fresh;
+        }
+    }
+
+    private boolean isFresh(GpuSnapshot snapshot) {
+        return snapshot != null && System.currentTimeMillis() - cachedAt < TTL.toMillis();
     }
 
     private GpuSnapshot probe() {

@@ -21,7 +21,8 @@ import org.springframework.stereotype.Component;
 public class WindowsGpuProbe implements GpuProbe {
 
     private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-    private static final Duration TIMEOUT = Duration.ofSeconds(3);
+    // a cold PowerShell start on a busy machine can exceed three seconds
+    private static final Duration TIMEOUT = Duration.ofSeconds(6);
     private static final long ADAPTER_TTL_MILLIS = 120_000L;
 
     private static final String ADAPTER_SCRIPT = """

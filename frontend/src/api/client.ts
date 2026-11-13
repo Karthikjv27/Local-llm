@@ -1,4 +1,4 @@
-import type { ChatDetail, ChatSummary, ModelView, StreamEvent } from './types'
+import type { ChatDetail, ChatSummary, MetricsResponse, ModelView, StreamEvent } from './types'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 
@@ -17,6 +17,8 @@ export const api = {
     fetch(query ? `/api/chats?q=${encodeURIComponent(query)}` : '/api/chats').then(readJson<ChatSummary[]>),
 
   chat: (id: string) => fetch(`/api/chats/${id}`).then(readJson<ChatDetail>),
+
+  metrics: () => fetch('/api/metrics').then(readJson<MetricsResponse>),
 
   createChat: (model: string) =>
     fetch('/api/chats', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ model }) }).then(

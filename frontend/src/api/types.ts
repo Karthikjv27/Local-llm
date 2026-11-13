@@ -49,3 +49,44 @@ export type StreamEvent =
   | { type: 'token'; text: string }
   | { type: 'done'; message: MessageView }
   | { type: 'error'; error: string }
+
+export interface GpuAdapter {
+  name: string
+  memoryTotalBytes: number | null
+}
+
+export interface GpuSnapshot {
+  source: string
+  available: boolean
+  adapters: GpuAdapter[]
+  utilizationPercent: number | null
+  memoryUsedBytes: number | null
+  memoryTotalBytes: number | null
+  temperatureC: number | null
+  detail: string
+}
+
+export interface MetricsResponse {
+  timestamp: string
+  cpu: {
+    name: string
+    physicalCores: number
+    logicalProcessors: number
+    loadPercent: number
+    perCorePercent: number[]
+  }
+  memory: {
+    totalBytes: number
+    usedBytes: number
+    availableBytes: number
+    usedPercent: number
+  }
+  gpu: GpuSnapshot
+  ollama: {
+    reachable: boolean
+    version: string | null
+    loadedModels: number
+    vramBytes: number
+    models: string[]
+  }
+}
