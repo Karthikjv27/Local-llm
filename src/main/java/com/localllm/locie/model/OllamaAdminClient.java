@@ -27,13 +27,12 @@ public class OllamaAdminClient {
 
     private final RestClient client;
 
-    public OllamaAdminClient(RestClient.Builder builder,
-                             @Value("${locie.ollama.base-url}") String baseUrl,
+    public OllamaAdminClient(@Value("${locie.ollama.base-url}") String baseUrl,
                              @Value("${locie.ollama.timeout:5s}") Duration timeout) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeout);
         factory.setReadTimeout(timeout);
-        this.client = builder.baseUrl(baseUrl).requestFactory(factory).build();
+        this.client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
     }
 
     /** Ollama's reported version, or empty when the daemon is unreachable. */

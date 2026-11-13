@@ -60,4 +60,9 @@ public class ChatController {
                                                        @Valid @RequestBody SendMessageRequest request) {
         return chats.streamReply(id, request.content());
     }
+
+    @PostMapping(value = "/{id}/regenerate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<ChatStreamEvent>> regenerate(@PathVariable UUID id) {
+        return chats.regenerate(id);
+    }
 }

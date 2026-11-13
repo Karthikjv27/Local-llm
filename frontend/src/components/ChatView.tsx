@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ChatDetail } from '../api/types'
+import { MarkdownText } from './MarkdownText'
 import { MessageBubble } from './MessageBubble'
 
 interface ChatViewProps {
@@ -7,9 +8,10 @@ interface ChatViewProps {
   streaming: boolean
   streamText: string
   onStart: () => void
+  onRegenerate: () => void
 }
 
-export function ChatView({ detail, streaming, streamText, onStart }: ChatViewProps) {
+export function ChatView({ detail, streaming, streamText, onStart, onRegenerate }: ChatViewProps) {
   const bottom = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -34,6 +36,8 @@ export function ChatView({ detail, streaming, streamText, onStart }: ChatViewPro
     )
   }
 
+  const lastIndex = detail.messages.length - 1
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       <div className="mx-auto flex max-w-4xl flex-col gap-3">
@@ -43,18 +47,19 @@ export function ChatView({ detail, streaming, streamText, onStart }: ChatViewPro
           </p>
         )}
 
-        {detail.messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+        {detail.messages.map((message, index) => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            canRegenerate={!streaming && message.role === 'ASSISTANT' && index === lastIndex}
+            onRegenerate={onRegenerate}
+          />
         ))}
 
         {streaming && (
           <div className="flex justify-start">
-            <div className="max-w-[46rem] rounded-lg bg-zinc-900 px-3.5 py-2.5 text-sm leading-relaxed text-zinc-100 ring-1 ring-zinc-800">
-              {streamText ? (
-                <p className="whitespace-pre-wrap break-words">{streamText}</p>
-              ) : (
-                <p className="text-zinc-500">thinking…</p>
-              )}
+            <div className="max-w-[46rem] rounded-lg bg-zinc-900 px-3.5 py-2.5 ring-1 ring-zinc-800">
+              {streamText ? <MarkdownText text={streamText} /> : <p className="text-sm text-zinc-500">thinking…</p>}
             </div>
           </div>
         )}

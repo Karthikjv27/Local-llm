@@ -108,8 +108,37 @@ public class ChatService {
             chats.save(chat);
         }
 
-        List<Map<String, String>> prompt = promptMessages(chatId, chat.getSystemPrompt());
+        return stream(chat, model, promptMessages(chatId, chat.getSystemPrompt()));
+    }
 
+    /**
+     * Drops the trailing reply and generates a new one from the same prompt. Refuses when the chat
+     * does not currently end with a reply, so a failed regenerate cannot delete a user message.
+     */
+    public Flux<ServerSentEvent<ChatStreamEvent>> regenerate(UUID chatId) {
+        Chat chat = requireChat(chatId);
+        List<Message> history = messages.findByChatIdOrderBySeqAsc(chatId);
+        if (history.isEmpty() || history.get(history.size() - 1).getRole() != MessageRole.ASSISTANT) {
+            throw new IllegalArgumentException("The last message is not a reply");
+        }
+
+        int index = history.size() - 1;
+        while (index >= 0 && history.get(index).getRole() == MessageRole.ASSISTANT) {
+            messages.delete(history.get(index));
+            index--;
+        }
+        if (index < 0) {
+            throw new IllegalArgumentException("Nothing to regenerate");
+        }
+
+        chats.touch(chatId, Instant.now());
+        return stream(chat, chat.getModel(), promptMessages(chatId, chat.getSystemPrompt()));
+    }
+
+    /** Streams a reply for an already-built prompt and persists the result. */
+    private Flux<ServerSentEvent<ChatStreamEvent>> stream(Chat chat, String model,
+                                                          List<Map<String, String>> prompt) {
+        UUID chatId = chat.getId();
         return Flux.defer(() -> {
             StringBuilder answer = new StringBuilder();
             AtomicReference<OllamaStreamChunk> finalChunk = new AtomicReference<>();

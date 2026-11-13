@@ -1,22 +1,33 @@
 import type { MessageView } from '../api/types'
 import { duration } from '../lib/format'
+import { MarkdownText } from './MarkdownText'
 
-export function MessageBubble({ message }: { message: MessageView }) {
+interface MessageBubbleProps {
+  message: MessageView
+  canRegenerate?: boolean
+  onRegenerate?: () => void
+}
+
+export function MessageBubble({ message, canRegenerate = false, onRegenerate }: MessageBubbleProps) {
   const isUser = message.role === 'USER'
   const hasMetrics =
     !isUser &&
     (message.completionTokens != null || message.tokensPerSec != null || message.latencyMs != null)
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
       <div
-        className={`max-w-[46rem] rounded-lg px-3.5 py-2.5 text-sm leading-relaxed ring-1 ${
-          isUser
-            ? 'bg-emerald-600/90 text-white ring-emerald-500/40'
-            : 'bg-zinc-900 text-zinc-100 ring-zinc-800'
+        className={`max-w-[46rem] rounded-lg px-3.5 py-2.5 ring-1 ${
+          isUser ? 'bg-emerald-600/90 text-white ring-emerald-500/40' : 'bg-zinc-900 text-zinc-100 ring-zinc-800'
         }`}
       >
-        <p className="whitespace-pre-wrap break-words">{message.content || (message.error ? '' : '…')}</p>
+        {isUser ? (
+          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
+        ) : message.content ? (
+          <MarkdownText text={message.content} />
+        ) : (
+          <p className="text-sm text-zinc-500">{message.error ? '' : '…'}</p>
+        )}
 
         {message.error && <p className="mt-2 text-xs text-red-400">{message.error}</p>}
 
@@ -32,6 +43,16 @@ export function MessageBubble({ message }: { message: MessageView }) {
           </p>
         )}
       </div>
+
+      {canRegenerate && onRegenerate && (
+        <button
+          type="button"
+          onClick={onRegenerate}
+          className="rounded px-1 text-[11px] text-zinc-600 transition hover:text-zinc-300"
+        >
+          ↻ Regenerate
+        </button>
+      )}
     </div>
   )
 }

@@ -34,10 +34,8 @@ public class OllamaChatClient {
     private final WebClient webClient;
     private final ObjectMapper mapper;
 
-    public OllamaChatClient(WebClient.Builder builder,
-                            ObjectMapper mapper,
-                            @Value("${locie.ollama.base-url}") String baseUrl) {
-        this.webClient = builder.baseUrl(baseUrl).build();
+    public OllamaChatClient(ObjectMapper mapper, @Value("${locie.ollama.base-url}") String baseUrl) {
+        this.webClient = WebClient.builder().baseUrl(baseUrl).build();
         this.mapper = mapper;
     }
 

@@ -60,22 +60,10 @@ export const api = {
 }
 
 /**
- * POSTs a prompt and feeds every SSE frame to `onEvent` as it arrives. `EventSource` cannot POST,
- * so the stream is read from the fetch body and split on blank lines.
+ * Reads an SSE response body and hands every frame to `onEvent`. `EventSource` cannot POST, so the
+ * body is read from fetch and split on blank lines.
  */
-export async function streamMessage(
-  chatId: string,
-  content: string,
-  onEvent: (event: StreamEvent) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await fetch(`/api/chats/${chatId}/messages`, {
-    method: 'POST',
-    headers: { ...jsonHeaders, Accept: 'text/event-stream' },
-    body: JSON.stringify({ content }),
-    signal,
-  })
-
+async function consume(response: Response, onEvent: (event: StreamEvent) => void): Promise<void> {
   if (!response.ok || !response.body) {
     const problem = await response.json().catch(() => null)
     throw new Error(problem?.detail ?? `Request failed (${response.status})`)
@@ -113,4 +101,32 @@ export async function streamMessage(
       boundary = buffer.indexOf('\n\n')
     }
   }
+}
+
+export async function streamMessage(
+  chatId: string,
+  content: string,
+  onEvent: (event: StreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    headers: { ...jsonHeaders, Accept: 'text/event-stream' },
+    body: JSON.stringify({ content }),
+    signal,
+  })
+  await consume(response, onEvent)
+}
+
+export async function regenerateReply(
+  chatId: string,
+  onEvent: (event: StreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/chats/${chatId}/regenerate`, {
+    method: 'POST',
+    headers: { Accept: 'text/event-stream' },
+    signal,
+  })
+  await consume(response, onEvent)
 }

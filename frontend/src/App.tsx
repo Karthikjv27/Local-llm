@@ -21,7 +21,7 @@ export default function App() {
   const [banner, setBanner] = useState<string | null>(null)
   const [showMetrics, setShowMetrics] = useState(true)
 
-  const { streaming, text, error, send, stop, dismissError } = useChatStream()
+  const { streaming, text, error, send, regenerate, stop, dismissError } = useChatStream()
   const { metrics, history } = useMetrics()
 
   const loadModels = useCallback(async () => {
@@ -156,6 +156,37 @@ export default function App() {
     [detail, streaming, send, query, loadChats],
   )
 
+  const regenerateLast = useCallback(async () => {
+    if (!detail || streaming) {
+      return
+    }
+    const chatId = detail.id
+
+    // drop the reply locally so the new one streams into its place
+    setDetail((current) => {
+      if (!current || current.id !== chatId) {
+        return current
+      }
+      const messages = [...current.messages]
+      while (messages.length > 0 && messages[messages.length - 1].role === 'ASSISTANT') {
+        messages.pop()
+      }
+      return { ...current, messages }
+    })
+
+    await regenerate(chatId, {
+      onDone: (message) => {
+        setDetail((current) =>
+          current && current.id === chatId
+            ? { ...current, messages: [...current.messages, message] }
+            : current,
+        )
+        void loadChats(query)
+        void loadModels()
+      },
+    })
+  }, [detail, streaming, regenerate, query, loadChats, loadModels])
+
   const problem = banner ?? error
 
   return (
@@ -209,7 +240,13 @@ export default function App() {
           </div>
         )}
 
-        <ChatView detail={detail} streaming={streaming} streamText={text} onStart={startChat} />
+        <ChatView
+          detail={detail}
+          streaming={streaming}
+          streamText={text}
+          onStart={startChat}
+          onRegenerate={regenerateLast}
+        />
 
         <Composer disabled={!detail} streaming={streaming} onSend={sendMessage} onStop={stop} />
       </main>

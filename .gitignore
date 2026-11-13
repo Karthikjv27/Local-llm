@@ -38,3 +38,7 @@ application-local.properties
 src/main/resources/application-local.properties
 frontend/node_modules/
 frontend/dist/
+
+# JVM crash artifacts
+hs_err_pid*.log
+replay_pid*.log
