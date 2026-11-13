@@ -6,7 +6,6 @@ import type { MetricsHistory } from '../hooks/useMetrics'
 interface MetricsPanelProps {
   metrics: MetricsResponse | null
   history: MetricsHistory
-  onClose: () => void
 }
 
 function tone(percent: number): string {
@@ -83,149 +82,124 @@ function Section({ title, right, children }: { title: string; right?: ReactNode;
   )
 }
 
-export function MetricsPanel({ metrics, history, onClose }: MetricsPanelProps) {
+export function MetricsPanel({ metrics, history }: MetricsPanelProps) {
+  if (!metrics) {
+    return <p className="text-[11px] text-zinc-600">Waiting for metrics…</p>
+  }
+
   return (
-    <aside className="flex w-72 shrink-0 flex-col gap-2 overflow-y-auto border-l border-zinc-800 px-3 py-3">
-      <div className="mb-1 flex items-center justify-between">
-        <p className="text-xs font-semibold text-zinc-300">System</p>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Hide metrics"
-          className="rounded px-1 text-[11px] text-zinc-600 hover:text-zinc-300"
-        >
-          ✕
-        </button>
-      </div>
+    <div className="flex flex-col gap-2">
+      <Section title="CPU" right={<span className="text-[10px] text-zinc-500">{metrics.cpu.logicalProcessors} threads</span>}>
+        <div className="flex items-baseline gap-1">
+          <span className={`text-xl font-semibold tabular-nums ${tone(metrics.cpu.loadPercent)}`}>
+            {metrics.cpu.loadPercent.toFixed(1)}
+          </span>
+          <span className="text-[11px] text-zinc-500">%</span>
+        </div>
+        <Sparkline values={history.cpu} toneClass={tone(metrics.cpu.loadPercent)} />
+        <p className="mt-0.5 truncate text-[10px] text-zinc-600" title={metrics.cpu.name}>
+          {metrics.cpu.name}
+        </p>
+        <div className="mt-2 grid grid-cols-6 gap-1">
+          {metrics.cpu.perCorePercent.map((value, index) => (
+            <div
+              key={index}
+              title={`thread ${index}: ${value.toFixed(0)}%`}
+              className="flex h-8 items-end overflow-hidden rounded-sm bg-zinc-800/70"
+            >
+              <div
+                className={`w-full rounded-sm transition-all ${fillTone(value)}`}
+                style={{ height: `${Math.max(6, Math.min(100, value))}%` }}
+              />
+            </div>
+          ))}
+        </div>
+      </Section>
 
-      {!metrics ? (
-        <p className="text-[11px] text-zinc-600">Waiting for metrics…</p>
-      ) : (
-        <>
-          <Section
-            title="CPU"
-            right={<span className="text-[10px] text-zinc-500">{metrics.cpu.logicalProcessors} threads</span>}
-          >
+      <Section
+        title="Memory"
+        right={
+          <span className="text-[10px] text-zinc-500">
+            {gigabytes(metrics.memory.usedBytes)} / {gigabytes(metrics.memory.totalBytes)}
+          </span>
+        }
+      >
+        <Bar value={metrics.memory.usedPercent} toneClass={fillTone(metrics.memory.usedPercent)} />
+        <p className="mt-1 text-[10px] text-zinc-500">
+          {metrics.memory.usedPercent.toFixed(1)}% used · {gigabytes(metrics.memory.availableBytes)} free
+        </p>
+      </Section>
+
+      <Section title="GPU" right={<span className="text-[10px] text-zinc-500">{metrics.gpu.source}</span>}>
+        {!metrics.gpu.available ? (
+          <p className="text-[11px] text-zinc-500">{metrics.gpu.detail}</p>
+        ) : (
+          <>
             <div className="flex items-baseline gap-1">
-              <span className={`text-xl font-semibold tabular-nums ${tone(metrics.cpu.loadPercent)}`}>
-                {metrics.cpu.loadPercent.toFixed(1)}
+              <span
+                className={`text-xl font-semibold tabular-nums ${
+                  metrics.gpu.utilizationPercent == null ? 'text-zinc-500' : tone(metrics.gpu.utilizationPercent)
+                }`}
+              >
+                {metrics.gpu.utilizationPercent == null ? '—' : metrics.gpu.utilizationPercent.toFixed(0)}
               </span>
-              <span className="text-[11px] text-zinc-500">%</span>
-            </div>
-            <Sparkline values={history.cpu} toneClass={tone(metrics.cpu.loadPercent)} />
-            <p className="mt-0.5 truncate text-[10px] text-zinc-600" title={metrics.cpu.name}>
-              {metrics.cpu.name}
-            </p>
-            <div className="mt-2 grid grid-cols-6 gap-1">
-              {metrics.cpu.perCorePercent.map((value, index) => (
-                <div
-                  key={index}
-                  title={`thread ${index}: ${value.toFixed(0)}%`}
-                  className="flex h-8 items-end overflow-hidden rounded-sm bg-zinc-800/70"
-                >
-                  <div
-                    className={`w-full rounded-sm transition-all ${fillTone(value)}`}
-                    style={{ height: `${Math.max(6, Math.min(100, value))}%` }}
-                  />
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          <Section
-            title="Memory"
-            right={
-              <span className="text-[10px] text-zinc-500">
-                {gigabytes(metrics.memory.usedBytes)} / {gigabytes(metrics.memory.totalBytes)}
+              <span className="text-[11px] text-zinc-500">
+                %{metrics.gpu.temperatureC != null ? ` · ${metrics.gpu.temperatureC}°C` : ''}
               </span>
-            }
-          >
-            <Bar value={metrics.memory.usedPercent} toneClass={fillTone(metrics.memory.usedPercent)} />
-            <p className="mt-1 text-[10px] text-zinc-500">
-              {metrics.memory.usedPercent.toFixed(1)}% used · {gigabytes(metrics.memory.availableBytes)} free
-            </p>
-          </Section>
+            </div>
+            <Sparkline values={history.gpu} toneClass={tone(metrics.gpu.utilizationPercent ?? 0)} />
 
-          <Section title="GPU" right={<span className="text-[10px] text-zinc-500">{metrics.gpu.source}</span>}>
-            {!metrics.gpu.available ? (
-              <p className="text-[11px] text-zinc-500">{metrics.gpu.detail}</p>
-            ) : (
-              <>
-                <div className="flex items-baseline gap-1">
-                  <span
-                    className={`text-xl font-semibold tabular-nums ${
-                      metrics.gpu.utilizationPercent == null
-                        ? 'text-zinc-500'
-                        : tone(metrics.gpu.utilizationPercent)
-                    }`}
-                  >
-                    {metrics.gpu.utilizationPercent == null
-                      ? '—'
-                      : metrics.gpu.utilizationPercent.toFixed(0)}
-                  </span>
-                  <span className="text-[11px] text-zinc-500">
-                    %{metrics.gpu.temperatureC != null ? ` · ${metrics.gpu.temperatureC}°C` : ''}
-                  </span>
-                </div>
-                <Sparkline values={history.gpu} toneClass={tone(metrics.gpu.utilizationPercent ?? 0)} />
-
-                {metrics.gpu.memoryUsedBytes != null && metrics.gpu.memoryTotalBytes != null && (
-                  <div className="mt-1">
-                    <Bar
-                      value={(metrics.gpu.memoryUsedBytes / metrics.gpu.memoryTotalBytes) * 100}
-                      toneClass="bg-sky-500"
-                    />
-                    <p className="mt-1 text-[10px] text-zinc-500">
-                      VRAM {gigabytes(metrics.gpu.memoryUsedBytes)} / {gigabytes(metrics.gpu.memoryTotalBytes)}
-                    </p>
-                  </div>
-                )}
-
-                <ul className="mt-2 space-y-0.5">
-                  {metrics.gpu.adapters.map((adapter) => (
-                    <li key={adapter.name} className="truncate text-[10px] text-zinc-600" title={adapter.name}>
-                      {adapter.name}
-                      {adapter.memoryTotalBytes ? ` · ${gigabytes(adapter.memoryTotalBytes)}` : ''}
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-[10px] leading-snug text-zinc-600">{metrics.gpu.detail}</p>
-              </>
-            )}
-          </Section>
-
-          <Section
-            title="Ollama"
-            right={
-              <span className="flex items-center gap-1 text-[10px] text-zinc-500">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    metrics.ollama.reachable ? 'bg-emerald-400' : 'bg-red-500'
-                  }`}
+            {metrics.gpu.memoryUsedBytes != null && metrics.gpu.memoryTotalBytes != null && (
+              <div className="mt-1">
+                <Bar
+                  value={(metrics.gpu.memoryUsedBytes / metrics.gpu.memoryTotalBytes) * 100}
+                  toneClass="bg-sky-500"
                 />
-                {metrics.ollama.reachable ? metrics.ollama.version : 'offline'}
-              </span>
-            }
-          >
-            {metrics.ollama.loadedModels === 0 ? (
-              <p className="text-[11px] text-zinc-600">No models loaded</p>
-            ) : (
-              <>
-                <p className="text-[11px] text-zinc-400">
-                  {metrics.ollama.loadedModels} loaded · {gigabytes(metrics.ollama.vramBytes)} in VRAM
+                <p className="mt-1 text-[10px] text-zinc-500">
+                  VRAM {gigabytes(metrics.gpu.memoryUsedBytes)} / {gigabytes(metrics.gpu.memoryTotalBytes)}
                 </p>
-                <ul className="mt-1 space-y-0.5">
-                  {metrics.ollama.models.map((name) => (
-                    <li key={name} className="truncate text-[10px] text-zinc-600">
-                      {name}
-                    </li>
-                  ))}
-                </ul>
-              </>
+              </div>
             )}
-          </Section>
-        </>
-      )}
-    </aside>
+
+            <ul className="mt-2 space-y-0.5">
+              {metrics.gpu.adapters.map((adapter) => (
+                <li key={adapter.name} className="truncate text-[10px] text-zinc-600" title={adapter.name}>
+                  {adapter.name}
+                  {adapter.memoryTotalBytes ? ` · ${gigabytes(adapter.memoryTotalBytes)}` : ''}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[10px] leading-snug text-zinc-600">{metrics.gpu.detail}</p>
+          </>
+        )}
+      </Section>
+
+      <Section
+        title="Ollama"
+        right={
+          <span className="flex items-center gap-1 text-[10px] text-zinc-500">
+            <span className={`h-1.5 w-1.5 rounded-full ${metrics.ollama.reachable ? 'bg-emerald-400' : 'bg-red-500'}`} />
+            {metrics.ollama.reachable ? metrics.ollama.version : 'offline'}
+          </span>
+        }
+      >
+        {metrics.ollama.loadedModels === 0 ? (
+          <p className="text-[11px] text-zinc-600">No models loaded</p>
+        ) : (
+          <>
+            <p className="text-[11px] text-zinc-400">
+              {metrics.ollama.loadedModels} loaded · {gigabytes(metrics.ollama.vramBytes)} in VRAM
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {metrics.ollama.models.map((name) => (
+                <li key={name} className="truncate text-[10px] text-zinc-600">
+                  {name}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </Section>
+    </div>
   )
 }

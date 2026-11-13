@@ -50,6 +50,30 @@ export type StreamEvent =
   | { type: 'done'; message: MessageView }
   | { type: 'error'; error: string }
 
+export interface CommandDefinitionView {
+  id: string
+  label: string
+  description: string
+  requiresArguments: boolean
+  destructive: boolean
+  timeoutSeconds: number
+}
+
+export type CommandStatus = 'RUNNING' | 'OK' | 'FAILED' | 'TIMEOUT' | 'REJECTED'
+
+export interface CommandRunView {
+  id: string
+  command: string
+  args: string | null
+  status: CommandStatus
+  exitCode: number | null
+  stdout: string | null
+  stderr: string | null
+  durationMs: number | null
+  startedAt: string
+  finishedAt: string | null
+}
+
 export interface GpuAdapter {
   name: string
   memoryTotalBytes: number | null

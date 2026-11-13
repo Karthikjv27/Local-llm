@@ -3,8 +3,8 @@ import { api } from './api/client'
 import type { ChatDetail, ChatSummary, ModelView } from './api/types'
 import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
-import { MetricsPanel } from './components/MetricsPanel'
 import { ModelPicker } from './components/ModelPicker'
+import { RightRail } from './components/RightRail'
 import { Sidebar } from './components/Sidebar'
 import { useChatStream } from './hooks/useChatStream'
 import { useMetrics } from './hooks/useMetrics'
@@ -215,7 +215,13 @@ export default function App() {
       </main>
 
       {showMetrics && (
-        <MetricsPanel metrics={metrics} history={history} onClose={() => setShowMetrics(false)} />
+        <RightRail
+          metrics={metrics}
+          history={history}
+          models={models}
+          chatId={detail?.id ?? null}
+          onClose={() => setShowMetrics(false)}
+        />
       )}
     </div>
   )

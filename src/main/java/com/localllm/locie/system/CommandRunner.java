@@ -10,14 +10,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Runs an external program with an argument list (never a shell string), a hard timeout and an
- * output cap. Used by the hardware probes, which must never block the request thread.
+ * output cap. There is no shell in the middle, so metacharacters in arguments have no effect.
  */
 public final class CommandRunner {
 
     private CommandRunner() {
     }
 
-    public record Result(int exitCode, String output, boolean timedOut) {
+    public record Result(int exitCode, String stdout, String stderr, boolean timedOut) {
         public boolean ok() {
             return !timedOut && exitCode == 0;
         }
@@ -26,13 +26,16 @@ public final class CommandRunner {
     public static Result run(List<String> argv, Duration timeout, int maxBytes) {
         Process process;
         try {
-            process = new ProcessBuilder(argv).redirectErrorStream(true).start();
+            process = new ProcessBuilder(argv).start();
         } catch (IOException ex) {
-            return new Result(-1, "", false);
+            String reason = ex.getMessage() == null ? "could not start the command" : ex.getMessage();
+            return new Result(-1, "", reason, false);
         }
 
-        AtomicReference<String> output = new AtomicReference<>("");
-        Thread reader = Thread.ofVirtual().start(() -> output.set(read(process, maxBytes)));
+        AtomicReference<String> stdout = new AtomicReference<>("");
+        AtomicReference<String> stderr = new AtomicReference<>("");
+        Thread outReader = Thread.ofVirtual().start(() -> stdout.set(read(process.getInputStream(), maxBytes)));
+        Thread errReader = Thread.ofVirtual().start(() -> stderr.set(read(process.getErrorStream(), maxBytes)));
 
         boolean finished;
         try {
@@ -44,30 +47,35 @@ public final class CommandRunner {
         if (!finished) {
             process.destroyForcibly();
         }
-        try {
-            reader.join(1000);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-        }
+        joinQuietly(outReader);
+        joinQuietly(errReader);
 
         int exitCode = -1;
         if (finished) {
             try {
                 exitCode = process.exitValue();
             } catch (IllegalThreadStateException ignored) {
-                // process died between waitFor and exitValue
+                // died between waitFor and exitValue
             }
         }
-        return new Result(exitCode, output.get(), !finished);
+        return new Result(exitCode, stdout.get(), stderr.get(), !finished);
     }
 
-    private static String read(Process process, int maxBytes) {
+    private static void joinQuietly(Thread thread) {
+        try {
+            thread.join(1000);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static String read(InputStream stream, int maxBytes) {
         StringBuilder text = new StringBuilder();
-        try (InputStream in = process.getInputStream()) {
+        try (stream) {
             byte[] chunk = new byte[4096];
             int total = 0;
             int read;
-            while ((read = in.read(chunk)) != -1) {
+            while ((read = stream.read(chunk)) != -1) {
                 if (total >= maxBytes) {
                     continue;
                 }

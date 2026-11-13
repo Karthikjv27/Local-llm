@@ -1,4 +1,12 @@
-import type { ChatDetail, ChatSummary, MetricsResponse, ModelView, StreamEvent } from './types'
+import type {
+  ChatDetail,
+  ChatSummary,
+  CommandDefinitionView,
+  CommandRunView,
+  MetricsResponse,
+  ModelView,
+  StreamEvent,
+} from './types'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 
@@ -19,6 +27,17 @@ export const api = {
   chat: (id: string) => fetch(`/api/chats/${id}`).then(readJson<ChatDetail>),
 
   metrics: () => fetch('/api/metrics').then(readJson<MetricsResponse>),
+
+  commands: () => fetch('/api/commands').then(readJson<CommandDefinitionView[]>),
+
+  commandHistory: () => fetch('/api/commands/history').then(readJson<CommandRunView[]>),
+
+  runCommand: (commandId: string, args: string, chatId: string | null) =>
+    fetch('/api/commands/run', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ commandId, args, chatId }),
+    }).then(readJson<CommandRunView>),
 
   createChat: (model: string) =>
     fetch('/api/chats', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ model }) }).then(

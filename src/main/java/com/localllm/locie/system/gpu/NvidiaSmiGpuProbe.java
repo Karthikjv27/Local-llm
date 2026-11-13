@@ -32,7 +32,7 @@ public class NvidiaSmiGpuProbe implements GpuProbe {
             return Optional.empty();
         }
         CommandRunner.Result result = CommandRunner.run(QUERY, TIMEOUT, 16_384);
-        if (!result.ok() || result.output().isBlank()) {
+        if (!result.ok() || result.stdout().isBlank()) {
             skipUntil = System.currentTimeMillis() + SKIP_MILLIS;
             return Optional.empty();
         }
@@ -43,7 +43,7 @@ public class NvidiaSmiGpuProbe implements GpuProbe {
         long totalBytes = 0;
         Long maxTemp = null;
 
-        for (String line : result.output().split("\\R")) {
+        for (String line : result.stdout().split("\\R")) {
             String[] parts = line.split(",");
             if (parts.length < 5) {
                 continue;

@@ -84,7 +84,7 @@ public class WindowsGpuProbe implements GpuProbe {
             return cachedAdapters;
         }
         List<GpuAdapter> adapters = new ArrayList<>();
-        for (String line : result.output().split("\\R")) {
+        for (String line : result.stdout().split("\\R")) {
             int separator = line.lastIndexOf('|');
             if (separator <= 0) {
                 continue;
@@ -109,7 +109,7 @@ public class WindowsGpuProbe implements GpuProbe {
         }
         Double utilization = null;
         Long memoryUsed = null;
-        for (String part : result.output().trim().split(";")) {
+        for (String part : result.stdout().trim().split(";")) {
             int separator = part.indexOf('=');
             if (separator <= 0) {
                 continue;
