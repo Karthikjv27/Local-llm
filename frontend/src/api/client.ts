@@ -1,5 +1,6 @@
 import type {
   ChatDetail,
+  CommandStreamEvent,
   ChatSummary,
   CommandDefinitionView,
   CommandRunView,
@@ -63,7 +64,7 @@ export const api = {
  * Reads an SSE response body and hands every frame to `onEvent`. `EventSource` cannot POST, so the
  * body is read from fetch and split on blank lines.
  */
-async function consume(response: Response, onEvent: (event: StreamEvent) => void): Promise<void> {
+async function consume<T>(response: Response, onEvent: (event: T) => void): Promise<void> {
   if (!response.ok || !response.body) {
     const problem = await response.json().catch(() => null)
     throw new Error(problem?.detail ?? `Request failed (${response.status})`)
@@ -93,7 +94,7 @@ async function consume(response: Response, onEvent: (event: StreamEvent) => void
 
       if (payload) {
         try {
-          onEvent(JSON.parse(payload) as StreamEvent)
+          onEvent(JSON.parse(payload) as T)
         } catch {
           // ignore an unparsable frame rather than killing the stream
         }
@@ -114,6 +115,20 @@ export async function streamMessage(
     headers: { ...jsonHeaders, Accept: 'text/event-stream' },
     body: JSON.stringify({ content }),
     signal,
+  })
+  await consume(response, onEvent)
+}
+
+export async function streamCommand(
+  commandId: string,
+  args: string,
+  chatId: string | null,
+  onEvent: (event: CommandStreamEvent) => void,
+): Promise<void> {
+  const response = await fetch('/api/commands/run/stream', {
+    method: 'POST',
+    headers: { ...jsonHeaders, Accept: 'text/event-stream' },
+    body: JSON.stringify({ commandId, args, chatId }),
   })
   await consume(response, onEvent)
 }

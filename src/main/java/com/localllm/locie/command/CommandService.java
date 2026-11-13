@@ -7,7 +7,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 /** Validates a request against the allowlist, runs it without a shell, and records the result. */
 @Slf4j
@@ -34,7 +37,46 @@ public class CommandService {
         return runs.findTop50ByOrderByStartedAtDesc().stream().map(CommandRunView::from).toList();
     }
 
+    /** Runs a command to completion and returns the saved run. */
     public CommandRunView run(RunCommandRequest request) {
+        Prepared prepared = prepare(request);
+        CommandRunner.Result result = CommandRunner.run(prepared.argv(), prepared.definition().timeout(),
+                MAX_OUTPUT_BYTES);
+        return finish(prepared.run(), result);
+    }
+
+    /**
+     * Runs a command and streams its output as it arrives, so a slow download shows progress instead
+     * of blocking. The saved run is delivered in the final {@code done} event, exactly as the
+     * non-streaming endpoint would return it.
+     */
+    public Flux<ServerSentEvent<CommandStreamEvent>> stream(RunCommandRequest request) {
+        Prepared prepared = prepare(request);
+        Sinks.Many<ServerSentEvent<CommandStreamEvent>> sink = Sinks.many().unicast().onBackpressureBuffer();
+
+        Thread.ofVirtual().name("command-" + prepared.run().getId()).start(() -> {
+            try {
+                CommandRunner.Result result = CommandRunner.run(prepared.argv(),
+                        prepared.definition().timeout(),
+                        MAX_OUTPUT_BYTES,
+                        line -> sink.tryEmitNext(sse("line", CommandStreamEvent.line(line))));
+                sink.tryEmitNext(sse("done", CommandStreamEvent.done(finish(prepared.run(), result))));
+            } catch (RuntimeException ex) {
+                log.warn("streamed command {} failed: {}", prepared.run().getCommand(), ex.toString());
+                sink.tryEmitNext(sse("error", CommandStreamEvent.error(
+                        ex.getMessage() == null ? "command failed" : ex.getMessage())));
+            } finally {
+                sink.tryEmitComplete();
+            }
+        });
+
+        return sink.asFlux();
+    }
+
+    private record Prepared(CommandCatalog.Definition definition, List<String> argv, CommandRun run) {
+    }
+
+    private Prepared prepare(RunCommandRequest request) {
         CommandCatalog.Definition definition = catalog.require(request.commandId());
         String args = request.args() == null ? "" : request.args().trim();
         validate(definition, args);
@@ -51,22 +93,21 @@ public class CommandService {
         if (request.chatId() != null) {
             chats.findById(request.chatId()).ifPresent(run::setChat);
         }
-        CommandRun stored = runs.saveAndFlush(run);
+        return new Prepared(definition, argv, runs.saveAndFlush(run));
+    }
 
-        CommandRunner.Result result = CommandRunner.run(argv, definition.timeout(), MAX_OUTPUT_BYTES);
-
-        stored.setExitCode(result.timedOut() ? null : result.exitCode());
-        stored.setStdout(result.stdout());
-        stored.setStderr(result.stderr().isBlank() ? null : result.stderr());
-        stored.setStatus(statusOf(result));
-        stored.setFinishedAt(Instant.now());
-        if (stored.getStartedAt() != null) {
-            stored.setDurationMs((int) Duration.between(stored.getStartedAt(), stored.getFinishedAt()).toMillis());
+    private CommandRunView finish(CommandRun run, CommandRunner.Result result) {
+        run.setExitCode(result.timedOut() ? null : result.exitCode());
+        run.setStdout(result.stdout());
+        run.setStderr(result.stderr().isBlank() ? null : result.stderr());
+        run.setStatus(statusOf(result));
+        run.setFinishedAt(Instant.now());
+        if (run.getStartedAt() != null) {
+            run.setDurationMs((int) Duration.between(run.getStartedAt(), run.getFinishedAt()).toMillis());
         }
 
-        log.info("command {} finished with {} in {} ms", stored.getCommand(), stored.getStatus(),
-                stored.getDurationMs());
-        return CommandRunView.from(runs.save(stored));
+        log.info("command {} finished with {} in {} ms", run.getCommand(), run.getStatus(), run.getDurationMs());
+        return CommandRunView.from(runs.save(run));
     }
 
     private static void validate(CommandCatalog.Definition definition, String args) {
@@ -90,5 +131,9 @@ public class CommandService {
             return CommandStatus.TIMEOUT;
         }
         return result.exitCode() == 0 ? CommandStatus.OK : CommandStatus.FAILED;
+    }
+
+    private static ServerSentEvent<CommandStreamEvent> sse(String event, CommandStreamEvent data) {
+        return ServerSentEvent.<CommandStreamEvent>builder().event(event).data(data).build();
     }
 }

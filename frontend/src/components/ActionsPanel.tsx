@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api } from '../api/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api, streamCommand } from '../api/client'
 import type { CommandDefinitionView, CommandRunView, ModelView } from '../api/types'
 import { duration } from '../lib/format'
+
+const MAX_LIVE_LINES = 200
 
 function statusTone(status: string): string {
   if (status === 'OK') {
@@ -11,6 +13,31 @@ function statusTone(status: string): string {
     return 'text-amber-400'
   }
   return 'text-red-400'
+}
+
+/**
+ * `ollama pull` redraws a progress bar in place, and every redraw arrives as its own line. Keep one
+ * entry per bar (keyed by its digest prefix) so the panel grows instead of flickering.
+ */
+function mergeLine(lines: string[], incoming: string): string[] {
+  if (lines.length > 0 && lines[lines.length - 1] === incoming) {
+    return lines
+  }
+
+  const bar = incoming.match(/^(.{0,80}?:)\s/)
+  const isProgress = bar !== null && /%|\d\s*[KMGT]?B\s*\//.test(incoming)
+  let next: string[]
+
+  if (isProgress) {
+    const key = bar[1]
+    const index = lines.findIndex((line) => line.startsWith(key))
+    next =
+      index >= 0 ? lines.map((line, at) => (at === index ? incoming : line)) : [...lines, incoming]
+  } else {
+    next = [...lines, incoming]
+  }
+
+  return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
 }
 
 interface ActionsPanelProps {
@@ -23,9 +50,11 @@ export function ActionsPanel({ models, chatId }: ActionsPanelProps) {
   const [selectedId, setSelectedId] = useState('')
   const [args, setArgs] = useState('')
   const [result, setResult] = useState<CommandRunView | null>(null)
+  const [live, setLive] = useState<string[]>([])
   const [history, setHistory] = useState<CommandRunView[]>([])
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const liveBox = useRef<HTMLPreElement>(null)
 
   const load = useCallback(async () => {
     try {
@@ -41,6 +70,12 @@ export function ActionsPanel({ models, chatId }: ActionsPanelProps) {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (liveBox.current) {
+      liveBox.current.scrollTop = liveBox.current.scrollHeight
+    }
+  }, [live])
 
   const selected = definitions.find((definition) => definition.id === selectedId) ?? null
 
@@ -59,9 +94,33 @@ export function ActionsPanel({ models, chatId }: ActionsPanelProps) {
 
     setRunning(true)
     setError(null)
+    setLive([])
+
+    let saved: CommandRunView | null = null
+    let failure: string | null = null
+
     try {
-      const run = await api.runCommand(selected.id, selected.requiresArguments ? value : '', chatId)
-      setResult(run)
+      await streamCommand(
+        selected.id,
+        selected.requiresArguments ? value : '',
+        chatId,
+        (event) => {
+          if (event.type === 'line') {
+            setLive((current) => mergeLine(current, event.line))
+          } else if (event.type === 'done') {
+            saved = event.run
+          } else if (event.type === 'error') {
+            failure = event.error
+          }
+        },
+      )
+
+      if (saved) {
+        setResult(saved)
+      }
+      if (failure) {
+        setError(failure)
+      }
       setHistory(await api.commandHistory())
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Command failed')
@@ -123,14 +182,34 @@ export function ActionsPanel({ models, chatId }: ActionsPanelProps) {
         {error && <p className="mt-2 text-[10px] text-red-400">{error}</p>}
       </section>
 
-      {result && (
+      {running && (
+        <section className="rounded-lg border border-amber-900/60 bg-zinc-900/40 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-medium text-amber-400">
+              <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400 align-middle" />
+              streaming
+            </span>
+            <span className="text-[10px] text-zinc-600">{selected?.timeoutSeconds}s limit</span>
+          </div>
+          <pre
+            ref={liveBox}
+            className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-zinc-800 bg-zinc-950 p-2 text-[10px] leading-relaxed text-zinc-300"
+          >
+            {live.length > 0 ? live.join('\n') : 'waiting for output…'}
+          </pre>
+        </section>
+      )}
+
+      {!running && result && (
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
           <div className="flex items-center justify-between gap-2">
             <span className={`text-[10px] font-medium ${statusTone(result.status)}`}>
               {result.status}
               {result.exitCode != null ? ` · exit ${result.exitCode}` : ''}
             </span>
-            <span className="text-[10px] text-zinc-600">{result.durationMs != null ? duration(result.durationMs) : ''}</span>
+            <span className="text-[10px] text-zinc-600">
+              {result.durationMs != null ? duration(result.durationMs) : ''}
+            </span>
           </div>
           <p className="mt-1 truncate text-[10px] text-zinc-500" title={result.command}>
             {result.command}

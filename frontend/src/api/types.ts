@@ -74,6 +74,11 @@ export interface CommandRunView {
   finishedAt: string | null
 }
 
+export type CommandStreamEvent =
+  | { type: 'line'; line: string }
+  | { type: 'done'; run: CommandRunView }
+  | { type: 'error'; error: string }
+
 export interface GpuAdapter {
   name: string
   memoryTotalBytes: number | null
