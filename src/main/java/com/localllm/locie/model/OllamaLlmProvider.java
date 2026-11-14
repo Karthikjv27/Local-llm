@@ -37,39 +37,45 @@ public class OllamaLlmProvider implements LlmProvider {
     @Override
     public List<Model> models() {
         return admin.listModels().stream()
-                .map(entry -> new Model(
-                        entry.name(),
-                        detail(entry.details()).map(OllamaAdminClient.ModelDetails::family).orElse(null),
-                        detail(entry.details()).map(OllamaAdminClient.ModelDetails::parameterSize).orElse(null),
-                        detail(entry.details()).map(OllamaAdminClient.ModelDetails::quantizationLevel).orElse(null),
-                        entry.size(),
-                        entry.modifiedAt()))
+                .map(entry -> {
+                    ModelFacts facts = ModelFacts.of(entry.details());
+                    return new Model(
+                            entry.name(),
+                            facts.family(),
+                            facts.parameterSize(),
+                            facts.quantization(),
+                            entry.size(),
+                            entry.modifiedAt());
+                })
                 .toList();
     }
 
     @Override
     public List<Running> running() {
         return admin.runningModels().stream()
-                .map(entry -> new Running(
-                        entry.name(),
-                        detail(entry.details()).map(OllamaAdminClient.ModelDetails::family).orElse(null),
-                        detail(entry.details()).map(OllamaAdminClient.ModelDetails::parameterSize).orElse(null),
-                        detail(entry.details()).map(OllamaAdminClient.ModelDetails::quantizationLevel).orElse(null),
-                        entry.size(),
-                        entry.sizeVram(),
-                        entry.expiresAt()))
+                .map(entry -> {
+                    ModelFacts facts = ModelFacts.of(entry.details());
+                    return new Running(
+                            entry.name(),
+                            facts.family(),
+                            facts.parameterSize(),
+                            facts.quantization(),
+                            entry.size(),
+                            entry.sizeVram(),
+                            entry.expiresAt());
+                })
                 .toList();
     }
 
     @Override
     public Detail show(String model) {
         OllamaAdminClient.ShowResponse response = admin.showModel(model);
-        OllamaAdminClient.ModelDetails details = response.details();
+        ModelFacts facts = ModelFacts.of(response.details());
         return new Detail(
-                details == null ? null : details.family(),
-                details == null ? null : details.format(),
-                details == null ? null : details.parameterSize(),
-                details == null ? null : details.quantizationLevel(),
+                facts.family(),
+                facts.format(),
+                facts.parameterSize(),
+                facts.quantization(),
                 response.capabilities() == null ? List.of() : response.capabilities(),
                 response.system(),
                 response.parameters(),
@@ -81,7 +87,17 @@ public class OllamaLlmProvider implements LlmProvider {
         return admin.version();
     }
 
-    private static Optional<OllamaAdminClient.ModelDetails> detail(OllamaAdminClient.ModelDetails details) {
-        return Optional.ofNullable(details);
+    /**
+     * Ollama answers "no details" with a null object rather than absent fields, and the same three
+     * facts are needed in every mapping - so they are read once, here.
+     */
+    private record ModelFacts(String family, String format, String parameterSize, String quantization) {
+
+        static ModelFacts of(OllamaAdminClient.ModelDetails details) {
+            return details == null
+                    ? new ModelFacts(null, null, null, null)
+                    : new ModelFacts(details.family(), details.format(),
+                            details.parameterSize(), details.quantizationLevel());
+        }
     }
 }

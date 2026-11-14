@@ -437,7 +437,10 @@ cd frontend && npm run lint    # oxlint
 | `LocieApplicationTests` | The whole context loads: datasource, Flyway, JPA mappings, every bean |
 | `CommandRunnerTest` (5 tests) | Line framing: cursor-reset ends a line, terminal escapes are swallowed, spinner frames stripped, a multi-byte character split at a 1-byte read boundary survives, a 3,000-char line isn't split by the 2,048-char buffer |
 | `ContextBudgetTest` (5 tests) | Everything fits; oldest dropped first; a window never starts with a reply; the system prompt consumes budget; the four-chars-per-token estimate |
-| `ArchitectureTest` (7 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
+| `ArchitectureTest` (6 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
+
+CI runs the same gates on every push (`.github/workflows/ci.yml`): `mvn verify` for the backend against a
+Postgres service container, then `npm ci`, `npm run lint` and `npm run build` in `frontend/`.
 
 The splitter tests exist because that logic shipped broken twice — first leaking `ESC[?2026h`, then treating `[`
 as the CSI terminator. Each test was verified by reintroducing the bug (`cursorReset`, missing length guard,

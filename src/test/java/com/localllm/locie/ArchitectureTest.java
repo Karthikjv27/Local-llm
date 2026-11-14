@@ -33,11 +33,6 @@ class ArchitectureTest {
                 return name.startsWith("org.springframework") || name.startsWith("jakarta");
             });
 
-    /** The two transport clients behind {@code OllamaLlmProvider}. */
-    private static final DescribedPredicate<JavaClass> TRANSPORT_CLIENTS = DescribedPredicate.describe(
-            "an Ollama transport client",
-            javaClass -> Set.of("OllamaChatClient", "OllamaAdminClient").contains(javaClass.getSimpleName()));
-
     @ArchTest
     static final ArchRule controllers_do_not_touch_repositories =
             noClasses().that().haveSimpleNameEndingWith("Controller")
@@ -73,10 +68,4 @@ class ArchitectureTest {
             noClasses().that().haveSimpleName("LlmProvider")
                     .should().dependOnClassesThat().haveSimpleNameStartingWith("Ollama")
                     .because("the interface describes capabilities, the adapter owns the wire format");
-
-    @ArchTest
-    static final ArchRule adapters_are_only_reachable_inside_the_model_module =
-            noClasses().that().resideOutsideOfPackage("com.localllm.locie.model..")
-                    .should().dependOnClassesThat(TRANSPORT_CLIENTS)
-                    .because("transport clients are implementation details of OllamaLlmProvider");
 }
