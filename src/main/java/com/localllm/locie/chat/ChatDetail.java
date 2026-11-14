@@ -10,6 +10,7 @@ public record ChatDetail(
         String model,
         String systemPrompt,
         boolean pinned,
+        boolean archived,
         Instant createdAt,
         Instant updatedAt,
         ContextView context,

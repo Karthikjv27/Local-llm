@@ -50,6 +50,10 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Persistent conversations** | Every chat and message is stored in PostgreSQL, including per-reply token counts, throughput and latency |
 | **Streaming replies** | Server-Sent Events over a POST; the reply appears token by token with a stop button |
 | **Regenerate** | Replaces the last reply in place, refusing to run when the chat doesn't end with a reply |
+| **Fork** | Copies a conversation (whole or up to a chosen message) into a new chat so it can diverge |
+| **Rewind** | Deletes a message and everything after it, so a prompt can be reworked from that point |
+| **Archive** | Moves chats out of the main list into an archived view instead of deleting them |
+| **Chat stats** | Per-conversation totals and averages — messages, tokens, tok/s, latency, failures and stops |
 | **Model picker** | Installed models with parameter size, quantization, disk size, and which are resident in VRAM |
 | **Live metrics** | CPU load overall and per core, memory, GPU utilisation, VRAM, Ollama residency and version |
 | **Command console** | Seven allowlisted Ollama/system commands, with output streamed live and every run recorded |
@@ -57,7 +61,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Context budget** | The prompt is trimmed to a token budget newest-first, with a meter showing what the next request will send |
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
-| **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost |
+| **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
 
@@ -323,14 +327,18 @@ Why it looks like this:
 | GET | `/api/models/running` | Loaded models with `size_vram`, `gpuPercent`, `expiresAt` |
 | GET | `/api/models/{*name}` | Full metadata from `/api/show` (capabilities, parameters, system) |
 | GET | `/api/metrics` | CPU (system + per core), memory, GPU, Ollama |
-| GET | `/api/chats?q=` | Summaries, pinned first then most recent; `q` matches titles or message content |
+| GET | `/api/chats?q=&archived=` | Summaries, pinned first then most recent; `q` matches titles or message content; `archived=true` lists archived chats |
 | POST | `/api/chats` | Create (`model` required) |
 | GET | `/api/chats/{id}` | Chat with full message history |
-| PATCH | `/api/chats/{id}` | Rename, switch model, set system prompt, pin |
+| PATCH | `/api/chats/{id}` | Rename, switch model, set system prompt, pin, archive |
 | DELETE | `/api/chats/{id}` | Delete (cascades messages) |
 | GET | `/api/chats/{id}/export` | Markdown transcript, sent as a download attachment |
 | POST | `/api/chats/{id}/messages` | Send a prompt — **SSE** |
 | POST | `/api/chats/{id}/regenerate` | Replace the last reply — **SSE** |
+| POST | `/api/chats/{id}/stop` | Stop the running reply now — returns `{"stopped": true\|false}` |
+| POST | `/api/chats/{id}/fork?fromSeq=` | Copy the conversation (optionally up to a sequence number) into a new chat |
+| DELETE | `/api/chats/{id}/messages/{messageId}` | Rewind: remove this message and everything after it |
+| GET | `/api/chats/{id}/stats` | Message counts, token totals, average tok/s and latency, failures and stops |
 | GET | `/api/commands` | The allowlist, with timeouts and destructive flags |
 | POST | `/api/commands/run` | Run a command to completion, return the saved run |
 | POST | `/api/commands/run/stream` | Run a command — **SSE**: `line`*, `done` |
@@ -344,6 +352,7 @@ Errors are RFC 9457 `application/problem+json` (`status`, `title`, `detail`, `in
 | `IllegalArgumentException` (bad argument, bad request body) | 400 |
 | `ChatNotFoundException` | 404 |
 | `OllamaModelNotFoundException` | 404 |
+| `MessageNotFoundException` | 404 |
 | `OllamaUnavailableException` | 503 |
 
 Example error:
@@ -437,6 +446,8 @@ cd frontend && npm run lint    # oxlint
 | `LocieApplicationTests` | The whole context loads: datasource, Flyway, JPA mappings, every bean |
 | `CommandRunnerTest` (5 tests) | Line framing: cursor-reset ends a line, terminal escapes are swallowed, spinner frames stripped, a multi-byte character split at a 1-byte read boundary survives, a 3,000-char line isn't split by the 2,048-char buffer |
 | `ContextBudgetTest` (5 tests) | Everything fits; oldest dropped first; a window never starts with a reply; the system prompt consumes budget; the four-chars-per-token estimate |
+| `ChatStatsTest` (4 tests) | Empty history, rate/latency averages, failed vs stopped counts, and first/last message timestamps |
+| `ActiveStreamsTest` (4 tests) | A registered stream can be stopped, an idle stop is a no-op, closing unregisters, and an old close cannot remove a newer registration |
 | `ArchitectureTest` (6 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
 
 CI runs the same gates on every push (`.github/workflows/ci.yml`): `mvn verify` for the backend against a
@@ -526,8 +537,9 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 - Context is budgeted by an **estimate** (≈4 characters per token), not the model's real tokenizer, so a dense
   code-heavy chat can still overflow slightly. `CHAT_CONTEXT_TOKENS` must be raised if the model was started
   with a larger `num_ctx`.
-- Stop is detected when the server next writes a token; if the model is still loading, the partial reply is
-  persisted only once output begins. The generation is cancelled upstream, not just detached.
+- Stop still depends on the stream reaching a cancellation point: the server-side request flips a flag that
+  cancels the provider stream between chunks, but a model that never yields another chunk cannot be interrupted
+  mid-token. The partial reply is kept either way once cancellation is observed.
 - No authentication, binds all interfaces.
 - No pagination for chats, messages or command history; command output is stored up to 256 KB per run.
 - Search is substring matching, so it does not stem or rank results.
@@ -538,7 +550,7 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 1. CI (`mvn verify`, `npm ci && lint && build`) and a `docker-compose` that runs Postgres + the app and serves
    the built SPA from Spring.
 2. `@ConfigurationProperties` with validation, so a bad `locie.*` value fails at boot instead of first use.
-3. Server-side stop: an explicit endpoint so generation ends immediately rather than on the next write.
+3. Real tokenizer-aware context accounting, so the budget matches the model instead of a character estimate.
 4. Model comparison view using the tok/s already recorded per message.
 5. Image input — `llava` is already installed.
 6. Local RAG over a folder with pgvector and `nomic-embed-text`.

@@ -43,6 +43,13 @@ public class ApiExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(MessageNotFoundException.class)
+    public ProblemDetail messageNotFound(MessageNotFoundException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setTitle("Message not found");
+        return problem;
+    }
+
     /** A malformed path or query value (for example a UUID that isn't one) is a client mistake. */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ProblemDetail unreadableParameter(MethodArgumentTypeMismatchException ex) {

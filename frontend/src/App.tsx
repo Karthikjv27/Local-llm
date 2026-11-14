@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api/client'
-import type { ChatDetail, ChatSummary, ModelView } from './api/types'
+import type { ChatDetail, ChatStats, ChatSummary, ModelView } from './api/types'
 import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
 import { ContextMeter } from './components/ContextMeter'
@@ -18,7 +18,9 @@ export default function App() {
   const [models, setModels] = useState<ModelView[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ChatDetail | null>(null)
+  const [stats, setStats] = useState<ChatStats | null>(null)
   const [query, setQuery] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
   const [showMetrics, setShowMetrics] = useState(true)
 
@@ -33,17 +35,25 @@ export default function App() {
     }
   }, [])
 
-  const loadChats = useCallback(async (search: string) => {
+  const loadChats = useCallback(async (search: string, archived: boolean) => {
     try {
-      setChats(await api.chats(search))
+      setChats(await api.chats(search, archived))
     } catch (cause) {
       setBanner(cause instanceof Error ? cause.message : 'Could not load chats')
     }
   }, [])
 
+  const refreshStats = useCallback(async (chatId: string) => {
+    try {
+      setStats(await api.stats(chatId))
+    } catch {
+      setStats(null)
+    }
+  }, [])
+
   useEffect(() => {
-    void loadChats(query)
-  }, [query, loadChats])
+    void loadChats(query, showArchived)
+  }, [query, showArchived, loadChats])
 
   useEffect(() => {
     void loadModels()
@@ -51,14 +61,18 @@ export default function App() {
     return () => clearInterval(timer)
   }, [loadModels])
 
-  const openChat = useCallback(async (id: string) => {
-    setActiveId(id)
-    try {
-      setDetail(await api.chat(id))
-    } catch (cause) {
-      setBanner(cause instanceof Error ? cause.message : 'Could not open chat')
-    }
-  }, [])
+  const openChat = useCallback(
+    async (id: string) => {
+      setActiveId(id)
+      try {
+        setDetail(await api.chat(id))
+        void refreshStats(id)
+      } catch (cause) {
+        setBanner(cause instanceof Error ? cause.message : 'Could not open chat')
+      }
+    },
+    [refreshStats],
+  )
 
   const startChat = useCallback(async () => {
     const model = models.find((candidate) => candidate.name === PREFERRED_MODEL)?.name ?? models[0]?.name
@@ -70,11 +84,12 @@ export default function App() {
       const chat = await api.createChat(model)
       setDetail(chat)
       setActiveId(chat.id)
-      await loadChats(query)
+      setStats(null)
+      await loadChats(query, showArchived)
     } catch (cause) {
       setBanner(cause instanceof Error ? cause.message : 'Could not create chat')
     }
-  }, [models, query, loadChats])
+  }, [models, query, showArchived, loadChats])
 
   const removeChat = useCallback(
     async (id: string) => {
@@ -83,14 +98,47 @@ export default function App() {
         if (activeId === id) {
           setDetail(null)
           setActiveId(null)
+          setStats(null)
         }
-        await loadChats(query)
+        await loadChats(query, showArchived)
       } catch (cause) {
         setBanner(cause instanceof Error ? cause.message : 'Could not delete chat')
       }
     },
-    [activeId, query, loadChats],
+    [activeId, query, showArchived, loadChats],
   )
+
+  const archiveChat = useCallback(
+    async (id: string, archived: boolean) => {
+      try {
+        await api.updateChat(id, { archived })
+        if (archived && activeId === id) {
+          setDetail(null)
+          setActiveId(null)
+          setStats(null)
+        }
+        await loadChats(query, showArchived)
+      } catch (cause) {
+        setBanner(cause instanceof Error ? cause.message : 'Could not archive chat')
+      }
+    },
+    [activeId, query, showArchived, loadChats],
+  )
+
+  const forkChat = useCallback(async () => {
+    if (!detail || streaming) {
+      return
+    }
+    try {
+      const copy = await api.forkChat(detail.id)
+      setDetail(copy)
+      setActiveId(copy.id)
+      void refreshStats(copy.id)
+      await loadChats(query, showArchived)
+    } catch (cause) {
+      setBanner(cause instanceof Error ? cause.message : 'Could not fork chat')
+    }
+  }, [detail, streaming, refreshStats, query, showArchived, loadChats])
 
   const changeModel = useCallback(
     async (model: string) => {
@@ -99,12 +147,12 @@ export default function App() {
       }
       try {
         setDetail(await api.updateChat(detail.id, { model }))
-        await loadChats(query)
+        await loadChats(query, showArchived)
       } catch (cause) {
         setBanner(cause instanceof Error ? cause.message : 'Could not switch model')
       }
     },
-    [detail, query, loadChats],
+    [detail, query, showArchived, loadChats],
   )
 
   const sendMessage = useCallback(
@@ -145,8 +193,9 @@ export default function App() {
               ? { ...current, messages: [...current.messages, message] }
               : current,
           )
-          void loadChats(query)
+          void loadChats(query, showArchived)
           void loadModels()
+          void refreshStats(chatId)
           // the first reply renames the chat server-side; pick up the new title
           void api
             .chat(chatId)
@@ -155,7 +204,7 @@ export default function App() {
         },
       })
     },
-    [detail, streaming, send, query, loadChats],
+    [detail, streaming, send, query, showArchived, loadChats, loadModels, refreshStats],
   )
 
   const regenerateLast = useCallback(async () => {
@@ -183,29 +232,55 @@ export default function App() {
             ? { ...current, messages: [...current.messages, message] }
             : current,
         )
-        void loadChats(query)
+        void loadChats(query, showArchived)
         void loadModels()
+        void refreshStats(chatId)
       },
     })
-  }, [detail, streaming, regenerate, query, loadChats, loadModels])
+  }, [detail, streaming, regenerate, query, showArchived, loadChats, loadModels, refreshStats])
+
+  /** Removes one message and everything after it, so the conversation can be rewound. */
+  const truncateFrom = useCallback(
+    async (messageId: string) => {
+      if (!detail || streaming) {
+        return
+      }
+      if (!window.confirm('Delete this message and every message after it?')) {
+        return
+      }
+      const chatId = detail.id
+      try {
+        const fresh = await api.truncateChat(chatId, messageId)
+        setDetail((current) => (current && current.id === chatId ? fresh : current))
+        void refreshStats(chatId)
+        void loadChats(query, showArchived)
+      } catch (cause) {
+        setBanner(cause instanceof Error ? cause.message : 'Could not rewind chat')
+      }
+    },
+    [detail, streaming, refreshStats, query, showArchived, loadChats],
+  )
 
   /**
-   * Stop aborts the fetch; the server then persists the partial reply, so the chat is re-read a
-   * moment later to show what was actually kept.
+   * Stop asks the server to end the generation, then aborts the fetch. The server persists the
+   * partial reply either way, so the chat is re-read a moment later to show what was kept.
    */
   const stopStreaming = useCallback(() => {
     const chatId = detail?.id
-    stop()
     if (!chatId) {
+      stop()
       return
     }
+    void api.stopChat(chatId).catch(() => undefined)
+    stop()
     window.setTimeout(() => {
       void api
         .chat(chatId)
         .then((fresh) => setDetail((current) => (current && current.id === chatId ? fresh : current)))
         .catch(() => undefined)
+      void refreshStats(chatId)
     }, 400)
-  }, [detail, stop])
+  }, [detail, stop, refreshStats])
 
   const problem = banner ?? error
 
@@ -215,10 +290,13 @@ export default function App() {
         chats={chats}
         activeId={activeId}
         query={query}
+        archivedView={showArchived}
         onQueryChange={setQuery}
         onSelect={openChat}
         onNew={startChat}
         onDelete={removeChat}
+        onArchive={archiveChat}
+        onToggleArchived={() => setShowArchived((current) => !current)}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
@@ -231,6 +309,23 @@ export default function App() {
           />
           <span className="truncate text-xs text-zinc-500">{detail?.title ?? 'No chat selected'}</span>
           <div className="ml-auto flex shrink-0 items-center gap-3">
+            {stats && stats.messages > 0 && (
+              <span className="hidden items-center text-[11px] text-zinc-500 xl:flex">
+                {stats.messages} msgs · {stats.completionTokens.toLocaleString()} tok
+                {stats.averageTokensPerSec != null ? ` · ${stats.averageTokensPerSec} tok/s avg` : ''}
+              </span>
+            )}
+            {detail && (
+              <button
+                type="button"
+                onClick={forkChat}
+                disabled={streaming}
+                title="Copy this conversation into a new chat"
+                className="rounded border border-zinc-800 px-2 py-1 text-[11px] text-zinc-400 transition hover:text-zinc-200 disabled:opacity-40"
+              >
+                Fork
+              </button>
+            )}
             {detail && <ContextMeter context={detail.context} />}
             {detail && (
               <a
@@ -276,6 +371,7 @@ export default function App() {
           streamText={text}
           onStart={startChat}
           onRegenerate={regenerateLast}
+          onTruncate={truncateFrom}
         />
 
         <Composer disabled={!detail} streaming={streaming} onSend={sendMessage} onStop={stopStreaming} />

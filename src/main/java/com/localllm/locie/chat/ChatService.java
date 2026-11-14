@@ -1,6 +1,7 @@
 package com.localllm.locie.chat;
 
 import com.localllm.locie.common.ChatNotFoundException;
+import com.localllm.locie.common.MessageNotFoundException;
 import com.localllm.locie.model.LlmProvider;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -8,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -33,24 +35,32 @@ public class ChatService {
     private final ChatRepository chats;
     private final MessageRepository messages;
     private final LlmProvider llm;
+    private final ActiveStreams activeStreams;
     private final int contextTokens;
     private final int historyLimit;
 
     public ChatService(ChatRepository chats, MessageRepository messages, LlmProvider llm,
+                       ActiveStreams activeStreams,
                        @Value("${locie.chat.context-tokens:4096}") int contextTokens,
                        @Value("${locie.chat.history-limit:40}") int historyLimit) {
         this.chats = chats;
         this.messages = messages;
         this.llm = llm;
+        this.activeStreams = activeStreams;
         this.contextTokens = contextTokens;
         this.historyLimit = historyLimit;
     }
 
     @Transactional(readOnly = true)
-    public List<ChatSummary> list(String query) {
-        List<Chat> found = query == null || query.isBlank()
-                ? chats.findByArchivedFalseOrderByPinnedDescUpdatedAtDesc()
-                : chats.search(query.trim());
+    public List<ChatSummary> list(String query, boolean archived) {
+        boolean blank = query == null || query.isBlank();
+        List<Chat> found = archived
+                ? (blank
+                        ? chats.findByArchivedTrueOrderByUpdatedAtDesc()
+                        : chats.findByArchivedTrueAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(query.trim()))
+                : (blank
+                        ? chats.findByArchivedFalseOrderByPinnedDescUpdatedAtDesc()
+                        : chats.search(query.trim()));
         return found.stream().map(ChatSummary::from).toList();
     }
 
@@ -82,6 +92,9 @@ public class ChatService {
         }
         if (request.pinned() != null) {
             chat.setPinned(request.pinned());
+        }
+        if (request.archived() != null) {
+            chat.setArchived(request.archived());
         }
         return detail(chats.saveAndFlush(chat));
     }
@@ -139,6 +152,73 @@ public class ChatService {
         return stream(chat, chat.getModel(), contextWindow(chat).prompt());
     }
 
+    /** Signals the reply currently streaming in this chat to stop; false when nothing is running. */
+    @Transactional(readOnly = true)
+    public boolean stop(UUID id) {
+        requireChat(id);
+        return activeStreams.stop(id);
+    }
+
+    /**
+     * Copies the conversation up to {@code fromSeq} (inclusive, default everything) into a new chat,
+     * so the user can explore a different continuation without losing the original.
+     */
+    @Transactional
+    public ChatDetail fork(UUID id, Integer fromSeq) {
+        Chat source = requireChat(id);
+        int limit = fromSeq == null ? Integer.MAX_VALUE : fromSeq;
+
+        Chat copy = new Chat();
+        copy.setTitle(source.getTitle() + " (fork)");
+        copy.setModel(source.getModel());
+        copy.setSystemPrompt(source.getSystemPrompt());
+        Chat saved = chats.saveAndFlush(copy);
+
+        for (Message original : messages.findByChatIdOrderBySeqAsc(id)) {
+            if (original.getSeq() > limit) {
+                break;
+            }
+            Message clone = new Message();
+            clone.setChat(saved);
+            clone.setSeq(original.getSeq());
+            clone.setRole(original.getRole());
+            clone.setContent(original.getContent());
+            clone.setModel(original.getModel());
+            clone.setPromptTokens(original.getPromptTokens());
+            clone.setCompletionTokens(original.getCompletionTokens());
+            clone.setLatencyMs(original.getLatencyMs());
+            clone.setTokensPerSec(original.getTokensPerSec());
+            clone.setError(original.getError());
+            clone.setCancelled(original.isCancelled());
+            messages.save(clone);
+        }
+        return detail(saved);
+    }
+
+    /** Deletes a message and everything after it, so the conversation can be rewound. */
+    @Transactional
+    public ChatDetail truncate(UUID chatId, UUID messageId) {
+        Chat chat = requireChat(chatId);
+        Message target = messages.findById(messageId)
+                .orElseThrow(() -> new MessageNotFoundException("Message " + messageId + " not found"));
+        if (!target.getChat().getId().equals(chatId)) {
+            throw new MessageNotFoundException("Message " + messageId + " is not part of this chat");
+        }
+        int fromSeq = target.getSeq();
+        messages.findByChatIdOrderBySeqAsc(chatId).stream()
+                .filter(message -> message.getSeq() >= fromSeq)
+                .forEach(messages::delete);
+        chats.touch(chatId, Instant.now());
+        return detail(chat);
+    }
+
+    /** Totals and averages over this conversation's stored messages. */
+    @Transactional(readOnly = true)
+    public ChatStats stats(UUID id) {
+        requireChat(id);
+        return ChatStats.from(id, messages.findByChatIdOrderBySeqAsc(id));
+    }
+
     /** The whole conversation as a Markdown document, ready to download. */
     @Transactional(readOnly = true)
     public ChatExport export(UUID id) {
@@ -192,15 +272,19 @@ public class ChatService {
 
     /** Streams a reply for an already-built prompt and persists the result. */
     private Flux<ServerSentEvent<ChatStreamEvent>> stream(Chat chat, String model,
-                                                          List<java.util.Map<String, String>> prompt) {
+                                                          List<Map<String, String>> prompt) {
         UUID chatId = chat.getId();
         return Flux.defer(() -> {
+            ActiveStreams.Registration registration = activeStreams.register(chatId);
             StringBuilder answer = new StringBuilder();
             AtomicReference<LlmProvider.Chunk> finalChunk = new AtomicReference<>();
             AtomicBoolean saved = new AtomicBoolean(false);
             long startedAt = System.nanoTime();
 
             return llm.stream(model, prompt)
+                    // A stop request flips this flag; the upstream call is then cancelled here, so
+                    // Stop works even when the browser never aborts its own request.
+                    .takeWhile(chunk -> !registration.stopped())
                     .doOnNext(chunk -> {
                         if (chunk.done()) {
                             finalChunk.set(chunk);
@@ -219,7 +303,9 @@ public class ChatService {
                         if (!saved.compareAndSet(false, true)) {
                             return Flux.empty();
                         }
-                        MessageView stored = persistAnswer(chat, model, answer.toString(), finalChunk.get(), startedAt);
+                        MessageView stored = registration.stopped()
+                                ? persistStopped(chat, model, answer.toString())
+                                : persistAnswer(chat, model, answer.toString(), finalChunk.get(), startedAt);
                         return Flux.just(sse("done", ChatStreamEvent.done(stored)));
                     }))
                     .onErrorResume(ex -> {
@@ -236,7 +322,8 @@ public class ChatService {
                             persistStopped(chat, model, answer.toString());
                             log.info("reply for chat {} stopped after {} characters", chatId, answer.length());
                         }
-                    }));
+                    }))
+                    .doFinally(signal -> registration.close());
         });
     }
 
@@ -281,7 +368,7 @@ public class ChatService {
     }
 
     /** Keeps what was generated before the user pressed Stop, marked so it is not mistaken for a failure. */
-    private void persistStopped(Chat chat, String model, String partial) {
+    private MessageView persistStopped(Chat chat, String model, String partial) {
         Message message = new Message();
         message.setChat(chat);
         message.setRole(MessageRole.ASSISTANT);
@@ -289,7 +376,7 @@ public class ChatService {
         message.setModel(model);
         message.setSeq(nextSeq(chat.getId()));
         message.setCancelled(true);
-        messages.save(message);
+        return MessageView.from(messages.save(message));
     }
 
     /**
@@ -331,6 +418,7 @@ public class ChatService {
                 chat.getModel(),
                 chat.getSystemPrompt(),
                 chat.isPinned(),
+                chat.isArchived(),
                 chat.getCreatedAt(),
                 chat.getUpdatedAt(),
                 window.view(),

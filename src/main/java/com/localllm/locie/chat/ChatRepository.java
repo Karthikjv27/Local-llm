@@ -15,6 +15,10 @@ public interface ChatRepository extends JpaRepository<Chat, UUID> {
 
     List<Chat> findByArchivedFalseAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(String query);
 
+    List<Chat> findByArchivedTrueOrderByUpdatedAtDesc();
+
+    List<Chat> findByArchivedTrueAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(String query);
+
     /**
      * Title or message-content match. Written as EXISTS rather than a join so one chat cannot appear
      * twice when several of its messages match, and so ORDER BY works with DISTINCT removed.

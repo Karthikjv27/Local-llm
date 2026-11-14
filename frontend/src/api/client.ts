@@ -1,5 +1,6 @@
 import type {
   ChatDetail,
+  ChatStats,
   CommandStreamEvent,
   ChatSummary,
   CommandDefinitionView,
@@ -22,10 +23,17 @@ async function readJson<T>(response: Response): Promise<T> {
 export const api = {
   models: () => fetch('/api/models').then(readJson<ModelView[]>),
 
-  chats: (query = '') =>
-    fetch(query ? `/api/chats?q=${encodeURIComponent(query)}` : '/api/chats').then(readJson<ChatSummary[]>),
+  chats: (query = '', archived = false) => {
+    const params = new URLSearchParams()
+    if (query) params.set('q', query)
+    if (archived) params.set('archived', 'true')
+    const suffix = params.toString()
+    return fetch(suffix ? `/api/chats?${suffix}` : '/api/chats').then(readJson<ChatSummary[]>)
+  },
 
   chat: (id: string) => fetch(`/api/chats/${id}`).then(readJson<ChatDetail>),
+
+  stats: (id: string) => fetch(`/api/chats/${id}/stats`).then(readJson<ChatStats>),
 
   exportChatUrl: (id: string) => `/api/chats/${encodeURIComponent(id)}/export`,
 
@@ -47,7 +55,7 @@ export const api = {
       readJson<ChatDetail>,
     ),
 
-  updateChat: (id: string, patch: { model?: string; title?: string; pinned?: boolean }) =>
+  updateChat: (id: string, patch: { model?: string; title?: string; pinned?: boolean; archived?: boolean; systemPrompt?: string }) =>
     fetch(`/api/chats/${id}`, {
       method: 'PATCH',
       headers: jsonHeaders,
@@ -60,6 +68,21 @@ export const api = {
       throw new Error(`Could not delete chat (${response.status})`)
     }
   },
+
+  /** Server-side stop, so the reply ends even if this browser stops listening. */
+  stopChat: (id: string) =>
+    fetch(`/api/chats/${id}/stop`, { method: 'POST' }).then(readJson<{ stopped: boolean }>),
+
+  forkChat: (id: string, fromSeq?: number) =>
+    fetch(`/api/chats/${id}/fork${fromSeq === undefined ? '' : `?fromSeq=${fromSeq}`}`, {
+      method: 'POST',
+    }).then(readJson<ChatDetail>),
+
+  /** Removes this message and everything after it. */
+  truncateChat: (id: string, messageId: string) =>
+    fetch(`/api/chats/${id}/messages/${encodeURIComponent(messageId)}`, { method: 'DELETE' }).then(
+      readJson<ChatDetail>,
+    ),
 }
 
 /**

@@ -15,6 +15,7 @@ export interface ChatSummary {
   title: string
   model: string
   pinned: boolean
+  archived: boolean
   createdAt: string
   updatedAt: string
 }
@@ -49,10 +50,26 @@ export interface ChatDetail {
   model: string
   systemPrompt: string | null
   pinned: boolean
+  archived: boolean
   createdAt: string
   updatedAt: string
   context: ContextView
   messages: MessageView[]
+}
+
+export interface ChatStats {
+  chatId: string
+  messages: number
+  userMessages: number
+  assistantMessages: number
+  promptTokens: number
+  completionTokens: number
+  averageTokensPerSec: number | null
+  averageLatencyMs: number | null
+  failedReplies: number
+  stoppedReplies: number
+  firstMessageAt: string | null
+  lastMessageAt: string | null
 }
 
 export type StreamEvent =

@@ -8,6 +8,7 @@ public record ChatSummary(
         String title,
         String model,
         boolean pinned,
+        boolean archived,
         Instant createdAt,
         Instant updatedAt) {
 
@@ -17,6 +18,7 @@ public record ChatSummary(
                 chat.getTitle(),
                 chat.getModel(),
                 chat.isPinned(),
+                chat.isArchived(),
                 chat.getCreatedAt(),
                 chat.getUpdatedAt());
     }

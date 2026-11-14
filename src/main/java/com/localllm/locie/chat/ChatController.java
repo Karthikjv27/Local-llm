@@ -32,8 +32,9 @@ public class ChatController {
     }
 
     @GetMapping
-    public List<ChatSummary> list(@RequestParam(name = "q", required = false) String query) {
-        return chats.list(query);
+    public List<ChatSummary> list(@RequestParam(name = "q", required = false) String query,
+                                  @RequestParam(name = "archived", defaultValue = "false") boolean archived) {
+        return chats.list(query, archived);
     }
 
     @PostMapping
@@ -69,6 +70,31 @@ public class ChatController {
         return chats.regenerate(id);
     }
 
+    /** Stops the reply that is streaming right now, even if this client stopped listening. */
+    @PostMapping("/{id}/stop")
+    public StopResult stop(@PathVariable UUID id) {
+        return new StopResult(chats.stop(id));
+    }
+
+    /** Copies the conversation into a new chat that can diverge from this point. */
+    @PostMapping("/{id}/fork")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ChatDetail fork(@PathVariable UUID id,
+                           @RequestParam(name = "fromSeq", required = false) Integer fromSeq) {
+        return chats.fork(id, fromSeq);
+    }
+
+    /** Rewinds the chat: removes this message and everything after it. */
+    @DeleteMapping("/{id}/messages/{messageId}")
+    public ChatDetail truncate(@PathVariable UUID id, @PathVariable UUID messageId) {
+        return chats.truncate(id, messageId);
+    }
+
+    @GetMapping("/{id}/stats")
+    public ChatStats stats(@PathVariable UUID id) {
+        return chats.stats(id);
+    }
+
     @GetMapping(value = "/{id}/export", produces = "text/markdown;charset=UTF-8")
     public ResponseEntity<String> export(@PathVariable UUID id) {
         ChatExport document = chats.export(id);
@@ -77,5 +103,9 @@ public class ChatController {
                         ContentDisposition.attachment().filename(document.filename()).build().toString())
                 .contentType(MediaType.parseMediaType("text/markdown;charset=UTF-8"))
                 .body(document.markdown());
+    }
+
+    /** Whether a stream was running when the stop request arrived. */
+    public record StopResult(boolean stopped) {
     }
 }

@@ -9,9 +9,10 @@ interface ChatViewProps {
   streamText: string
   onStart: () => void
   onRegenerate: () => void
+  onTruncate: (messageId: string) => void
 }
 
-export function ChatView({ detail, streaming, streamText, onStart, onRegenerate }: ChatViewProps) {
+export function ChatView({ detail, streaming, streamText, onStart, onRegenerate, onTruncate }: ChatViewProps) {
   const bottom = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -53,6 +54,7 @@ export function ChatView({ detail, streaming, streamText, onStart, onRegenerate 
             message={message}
             canRegenerate={!streaming && message.role === 'ASSISTANT' && index === lastIndex}
             onRegenerate={onRegenerate}
+            onTruncate={streaming ? undefined : () => onTruncate(message.id)}
           />
         ))}
 
