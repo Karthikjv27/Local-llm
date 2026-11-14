@@ -1,109 +1,80 @@
 package com.localllm.locie.model;
 
-import com.localllm.locie.model.OllamaAdminClient.ModelDetails;
-import com.localllm.locie.model.OllamaAdminClient.ModelEntry;
-import com.localllm.locie.model.OllamaAdminClient.RunningEntry;
-import com.localllm.locie.model.OllamaAdminClient.ShowResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
-/** Combines Ollama's catalog and residency data into the shapes the UI consumes. */
+/** Combines the provider's catalog and residency data into the shapes the UI consumes. */
 @Service
 public class ModelCatalogService {
 
-    private final OllamaAdminClient ollama;
+    private final LlmProvider provider;
 
-    public ModelCatalogService(OllamaAdminClient ollama) {
-        this.ollama = ollama;
+    public ModelCatalogService(LlmProvider provider) {
+        this.provider = provider;
     }
 
     public List<ModelView> list() {
-        Map<String, RunningEntry> running = ollama.runningModels().stream()
-                .collect(Collectors.toMap(RunningEntry::name, Function.identity(), (a, b) -> a));
+        Map<String, LlmProvider.Running> running = provider.running().stream()
+                .collect(Collectors.toMap(LlmProvider.Running::name, Function.identity(), (a, b) -> a));
 
-        return ollama.listModels().stream()
-                .map(entry -> {
-                    RunningEntry live = running.get(entry.name());
+        return provider.models().stream()
+                .map(model -> {
+                    LlmProvider.Running live = running.get(model.name());
                     return new ModelView(
-                            entry.name(),
-                            family(entry),
-                            parameterSize(entry),
-                            quantization(entry),
-                            entry.size(),
-                            entry.modifiedAt(),
+                            model.name(),
+                            model.family(),
+                            model.parameterSize(),
+                            model.quantization(),
+                            model.sizeBytes(),
+                            model.modifiedAt(),
                             live != null,
-                            live == null ? null : live.sizeVram(),
+                            live == null ? null : live.vramBytes(),
                             live == null ? null : live.expiresAt());
                 })
                 .toList();
     }
 
     public List<RunningModelView> running() {
-        return ollama.runningModels().stream()
+        return provider.running().stream()
                 .map(entry -> new RunningModelView(
                         entry.name(),
-                        family(entry),
-                        parameterSize(entry),
-                        quantization(entry),
-                        entry.size(),
-                        entry.sizeVram(),
-                        gpuPercent(entry.size(), entry.sizeVram()),
+                        entry.family(),
+                        entry.parameterSize(),
+                        entry.quantization(),
+                        entry.sizeBytes(),
+                        entry.vramBytes(),
+                        gpuPercent(entry.sizeBytes(), entry.vramBytes()),
                         entry.expiresAt()))
                 .toList();
     }
 
-    /** Ollama version reported by the daemon, or null when it is unreachable. */
-    public String ollamaVersion() {
-        return ollama.version().orElse(null);
+    /** Provider version reported by the runtime, or null when it is unreachable. */
+    public String runtimeVersion() {
+        return provider.version().orElse(null);
     }
 
     public ModelDetailView show(String name) {
-        ShowResponse response = ollama.showModel(name);
-        ModelDetails details = response.details();
+        LlmProvider.Detail detail = provider.show(name);
         return new ModelDetailView(
                 name,
-                details == null ? null : details.family(),
-                details == null ? null : details.format(),
-                details == null ? null : details.parameterSize(),
-                details == null ? null : details.quantizationLevel(),
-                response.capabilities() == null ? List.of() : response.capabilities(),
-                response.system(),
-                response.parameters(),
-                response.modelInfo() == null ? Map.of() : response.modelInfo());
+                detail.family(),
+                detail.format(),
+                detail.parameterSize(),
+                detail.quantization(),
+                detail.capabilities(),
+                detail.system(),
+                detail.parameters(),
+                detail.modelInfo());
     }
 
-    /** Share of the model's weights that Ollama reports as resident in VRAM. */
+    /** Share of the model's weights that the runtime reports as resident in VRAM. */
     private static double gpuPercent(long sizeBytes, long vramBytes) {
         if (sizeBytes <= 0) {
             return 0;
         }
         return Math.round((double) vramBytes / sizeBytes * 1000) / 10.0;
-    }
-
-    private static String family(ModelEntry entry) {
-        return entry.details() == null ? null : entry.details().family();
-    }
-
-    private static String family(RunningEntry entry) {
-        return entry.details() == null ? null : entry.details().family();
-    }
-
-    private static String parameterSize(ModelEntry entry) {
-        return entry.details() == null ? null : entry.details().parameterSize();
-    }
-
-    private static String parameterSize(RunningEntry entry) {
-        return entry.details() == null ? null : entry.details().parameterSize();
-    }
-
-    private static String quantization(ModelEntry entry) {
-        return entry.details() == null ? null : entry.details().quantizationLevel();
-    }
-
-    private static String quantization(RunningEntry entry) {
-        return entry.details() == null ? null : entry.details().quantizationLevel();
     }
 }

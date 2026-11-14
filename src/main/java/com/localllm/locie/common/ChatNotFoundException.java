@@ -1,4 +1,4 @@
-package com.localllm.locie.chat;
+package com.localllm.locie.common;
 
 public class ChatNotFoundException extends RuntimeException {
 

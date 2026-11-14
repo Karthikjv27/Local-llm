@@ -1,6 +1,6 @@
 package com.localllm.locie.system;
 
-import com.localllm.locie.model.OllamaAdminClient;
+import com.localllm.locie.model.LlmProvider;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -13,17 +13,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class HealthController {
 
     private final JdbcTemplate jdbc;
-    private final OllamaAdminClient ollama;
+    private final LlmProvider llm;
 
-    public HealthController(JdbcTemplate jdbc, OllamaAdminClient ollama) {
+    public HealthController(JdbcTemplate jdbc, LlmProvider llm) {
         this.jdbc = jdbc;
-        this.ollama = ollama;
+        this.llm = llm;
     }
 
     @GetMapping("/health")
     public Map<String, Object> health() {
         Component database = probeDatabase();
-        Component ollamaStatus = ollama.version()
+        Component ollamaStatus = llm.version()
                 .map(version -> new Component("UP", "ollama " + version))
                 .orElseGet(() -> new Component("DOWN", "unreachable"));
 

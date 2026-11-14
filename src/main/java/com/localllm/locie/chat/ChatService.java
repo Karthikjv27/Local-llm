@@ -1,7 +1,7 @@
 package com.localllm.locie.chat;
 
-import com.localllm.locie.model.OllamaChatClient;
-import com.localllm.locie.model.OllamaStreamChunk;
+import com.localllm.locie.common.ChatNotFoundException;
+import com.localllm.locie.model.LlmProvider;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -32,16 +32,16 @@ public class ChatService {
 
     private final ChatRepository chats;
     private final MessageRepository messages;
-    private final OllamaChatClient chatStream;
+    private final LlmProvider llm;
     private final int contextTokens;
     private final int historyLimit;
 
-    public ChatService(ChatRepository chats, MessageRepository messages, OllamaChatClient chatStream,
+    public ChatService(ChatRepository chats, MessageRepository messages, LlmProvider llm,
                        @Value("${locie.chat.context-tokens:4096}") int contextTokens,
                        @Value("${locie.chat.history-limit:40}") int historyLimit) {
         this.chats = chats;
         this.messages = messages;
-        this.chatStream = chatStream;
+        this.llm = llm;
         this.contextTokens = contextTokens;
         this.historyLimit = historyLimit;
     }
@@ -196,11 +196,11 @@ public class ChatService {
         UUID chatId = chat.getId();
         return Flux.defer(() -> {
             StringBuilder answer = new StringBuilder();
-            AtomicReference<OllamaStreamChunk> finalChunk = new AtomicReference<>();
+            AtomicReference<LlmProvider.Chunk> finalChunk = new AtomicReference<>();
             AtomicBoolean saved = new AtomicBoolean(false);
             long startedAt = System.nanoTime();
 
-            return chatStream.stream(model, prompt)
+            return llm.stream(model, prompt)
                     .doOnNext(chunk -> {
                         if (chunk.done()) {
                             finalChunk.set(chunk);
@@ -241,7 +241,7 @@ public class ChatService {
     }
 
     private MessageView persistAnswer(Chat chat, String model, String content,
-                                      OllamaStreamChunk finalChunk, long startedAtNanos) {
+                                      LlmProvider.Chunk finalChunk, long startedAtNanos) {
         int latencyMs = (int) ((System.nanoTime() - startedAtNanos) / 1_000_000);
         Integer promptTokens = finalChunk == null ? null : finalChunk.promptEvalCount();
         Integer completionTokens = finalChunk == null ? null : finalChunk.evalCount();

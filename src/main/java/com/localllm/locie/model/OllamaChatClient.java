@@ -8,11 +8,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -22,24 +20,24 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Streaming chat through Ollama's native {@code POST /api/chat} endpoint.
+ * Streaming chat through Ollama's native {@code POST /api/chat} endpoint. A transport detail of
+ * {@link OllamaLlmProvider}, not something the rest of the app depends on.
  *
  * <p>Spring AI's {@code ChatClient} is deliberately not used here: its streaming aggregator drops
  * Ollama's native usage payload, so {@code eval_count}/{@code eval_duration} - the exact throughput
  * counters - never reach the caller. Reading the NDJSON frames directly preserves them.
  */
-@Component
-public class OllamaChatClient {
+class OllamaChatClient {
 
     private final WebClient webClient;
     private final ObjectMapper mapper;
 
-    public OllamaChatClient(ObjectMapper mapper, @Value("${locie.ollama.base-url}") String baseUrl) {
+    OllamaChatClient(ObjectMapper mapper, String baseUrl) {
         this.webClient = WebClient.builder().baseUrl(baseUrl).build();
         this.mapper = mapper;
     }
 
-    public Flux<OllamaStreamChunk> stream(String model, List<Map<String, String>> messages) {
+    Flux<LlmProvider.Chunk> stream(String model, List<Map<String, String>> messages) {
         Map<String, Object> payload = Map.of("model", model, "messages", messages, "stream", true);
 
         return Flux.defer(() -> {
@@ -100,7 +98,7 @@ public class OllamaChatClient {
         return rest.isEmpty() ? List.of() : List.of(rest);
     }
 
-    private OllamaStreamChunk parse(String line) {
+    private LlmProvider.Chunk parse(String line) {
         JsonNode node;
         try {
             node = mapper.readTree(line);
@@ -110,7 +108,7 @@ public class OllamaChatClient {
         if (node.hasNonNull("error")) {
             throw new OllamaUnavailableException(node.get("error").asText());
         }
-        return new OllamaStreamChunk(
+        return new LlmProvider.Chunk(
                 node.path("message").path("content").asText(""),
                 node.path("done").asBoolean(false),
                 node.path("done_reason").asText(null),

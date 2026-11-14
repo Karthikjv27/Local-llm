@@ -77,7 +77,7 @@ public class SystemMetricsService {
             long vram = running.stream().mapToLong(RunningModelView::vramBytes).sum();
             return new MetricsResponse.OllamaRuntime(
                     true,
-                    catalog.ollamaVersion(),
+                    catalog.runtimeVersion(),
                     running.size(),
                     vram,
                     running.stream().map(RunningModelView::name).toList());

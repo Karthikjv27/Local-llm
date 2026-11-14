@@ -2,33 +2,31 @@ package com.localllm.locie.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.localllm.locie.common.OllamaModelNotFoundException;
+import com.localllm.locie.common.OllamaUnavailableException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
-import com.localllm.locie.common.OllamaModelNotFoundException;
-import com.localllm.locie.common.OllamaUnavailableException;
 
 /**
- * Thin client over Ollama's native HTTP API. Connectivity failures and unknown models are
- * translated into typed exceptions so the API layer can answer 503 / 404 instead of 500.
+ * Thin client over Ollama's native HTTP API. A transport detail of {@link OllamaLlmProvider}.
+ *
+ * <p>Connectivity failures and unknown models are translated into typed exceptions so the API
+ * layer can answer 503 / 404 instead of 500.
  */
-@Component
-public class OllamaAdminClient {
+class OllamaAdminClient {
 
     private final RestClient client;
 
-    public OllamaAdminClient(@Value("${locie.ollama.base-url}") String baseUrl,
-                             @Value("${locie.ollama.timeout:5s}") Duration timeout) {
+    OllamaAdminClient(String baseUrl, Duration timeout) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeout);
         factory.setReadTimeout(timeout);
@@ -36,7 +34,7 @@ public class OllamaAdminClient {
     }
 
     /** Ollama's reported version, or empty when the daemon is unreachable. */
-    public Optional<String> version() {
+    Optional<String> version() {
         try {
             VersionResponse response = client.get().uri("/api/version").retrieve().body(VersionResponse.class);
             return response == null ? Optional.empty() : Optional.ofNullable(response.version());
@@ -46,19 +44,19 @@ public class OllamaAdminClient {
     }
 
     /** Installed models, from {@code GET /api/tags}. */
-    public List<ModelEntry> listModels() {
+    List<ModelEntry> listModels() {
         TagsResponse response = call(() -> client.get().uri("/api/tags").retrieve().body(TagsResponse.class));
         return response == null || response.models() == null ? List.of() : response.models();
     }
 
     /** Currently loaded models and their VRAM residency, from {@code GET /api/ps}. */
-    public List<RunningEntry> runningModels() {
+    List<RunningEntry> runningModels() {
         PsResponse response = call(() -> client.get().uri("/api/ps").retrieve().body(PsResponse.class));
         return response == null || response.models() == null ? List.of() : response.models();
     }
 
     /** Full model metadata, from {@code POST /api/show}. */
-    public ShowResponse showModel(String name) {
+    ShowResponse showModel(String name) {
         ShowResponse response = call(() -> client.post()
                 .uri("/api/show")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -88,11 +86,11 @@ public class OllamaAdminClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record TagsResponse(List<ModelEntry> models) {
+    record TagsResponse(List<ModelEntry> models) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record ModelEntry(
+    record ModelEntry(
             String name,
             String model,
             @JsonProperty("modified_at") Instant modifiedAt,
@@ -102,11 +100,11 @@ public class OllamaAdminClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record PsResponse(List<RunningEntry> models) {
+    record PsResponse(List<RunningEntry> models) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record RunningEntry(
+    record RunningEntry(
             String name,
             String model,
             long size,
@@ -117,7 +115,7 @@ public class OllamaAdminClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record ModelDetails(
+    record ModelDetails(
             @JsonProperty("parent_model") String parentModel,
             String format,
             String family,
@@ -127,7 +125,7 @@ public class OllamaAdminClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record ShowResponse(
+    record ShowResponse(
             String license,
             String modelfile,
             String parameters,

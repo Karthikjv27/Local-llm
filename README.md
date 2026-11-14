@@ -412,6 +412,12 @@ run without sizing a pool or starving the request threads — which matters when
 **Why is the console limited to seven commands?** Because a "run any command" console is a remote shell with a
 web UI. The allowlist is the security boundary; adding a command is a deliberate code change with a review.
 
+**Why a `LlmProvider` port when there is only one implementation?** The boundaries that change are not
+persistence or HTTP — they are the model runtime, the hardware probes and the command surface. `LlmProvider`
+puts the seam where a second provider (a hosted API, another local runtime) will land, so that change costs one
+new adapter. ArchUnit enforces it: `ChatService` may not import an `Ollama*` class, and nothing outside `model`
+may touch the transport clients.
+
 **Trade-offs accepted:** no pagination yet (fine for personal history, not for thousands of chats); the frontend
 has no state library (fine at this size, would need one if the UI grew another axis); no authentication (local
 tool); GPU utilisation on Windows is the busiest engine, not an average.
@@ -431,6 +437,7 @@ cd frontend && npm run lint    # oxlint
 | `LocieApplicationTests` | The whole context loads: datasource, Flyway, JPA mappings, every bean |
 | `CommandRunnerTest` (5 tests) | Line framing: cursor-reset ends a line, terminal escapes are swallowed, spinner frames stripped, a multi-byte character split at a 1-byte read boundary survives, a 3,000-char line isn't split by the 2,048-char buffer |
 | `ContextBudgetTest` (5 tests) | Everything fits; oldest dropped first; a window never starts with a reply; the system prompt consumes budget; the four-chars-per-token estimate |
+| `ArchitectureTest` (7 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
 
 The splitter tests exist because that logic shipped broken twice — first leaking `ESC[?2026h`, then treating `[`
 as the CSI terminator. Each test was verified by reintroducing the bug (`cursorReset`, missing length guard,
@@ -543,7 +550,8 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 ├── src/main/java/com/localllm/locie/
 │   ├── LocieApplication.java
 │   ├── chat/                        Chat, Message, repositories, ChatService, SSE controller
-│   ├── model/                       OllamaAdminClient (RestClient), OllamaChatClient (NDJSON), catalog views
+│   ├── model/                       LlmProvider port · OllamaLlmProvider adapter ·
+│   │                                OllamaAdminClient (RestClient) + OllamaChatClient (NDJSON)
 │   ├── system/                      SystemMetricsService, HealthController, MetricsController,
 │   │   └── gpu/                     CommandRunner, GpuProbe, GpuService, NvidiaSmiGpuProbe, WindowsGpuProbe
 │   ├── command/                     CommandCatalog, CommandService, CommandRunner glue, stream events
