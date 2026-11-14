@@ -31,7 +31,16 @@ export interface MessageView {
   latencyMs: number | null
   tokensPerSec: number | null
   error: string | null
+  cancelled: boolean
   createdAt: string
+}
+
+export interface ContextView {
+  usedTokens: number
+  limitTokens: number
+  includedMessages: number
+  consideredMessages: number
+  trimmed: boolean
 }
 
 export interface ChatDetail {
@@ -42,6 +51,7 @@ export interface ChatDetail {
   pinned: boolean
   createdAt: string
   updatedAt: string
+  context: ContextView
   messages: MessageView[]
 }
 

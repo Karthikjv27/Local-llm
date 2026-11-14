@@ -14,6 +14,7 @@ public record MessageView(
         Integer latencyMs,
         BigDecimal tokensPerSec,
         String error,
+        boolean cancelled,
         Instant createdAt) {
 
     static MessageView from(Message message) {
@@ -27,6 +28,7 @@ public record MessageView(
                 message.getLatencyMs(),
                 message.getTokensPerSec(),
                 message.getError(),
+                message.isCancelled(),
                 message.getCreatedAt());
     }
 }

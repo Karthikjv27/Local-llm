@@ -15,6 +15,21 @@ public interface ChatRepository extends JpaRepository<Chat, UUID> {
 
     List<Chat> findByArchivedFalseAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(String query);
 
+    /**
+     * Title or message-content match. Written as EXISTS rather than a join so one chat cannot appear
+     * twice when several of its messages match, and so ORDER BY works with DISTINCT removed.
+     */
+    @Query("""
+            select c from Chat c
+            where c.archived = false
+              and (lower(c.title) like lower(concat('%', :query, '%'))
+                   or exists (select 1 from Message m
+                              where m.chat = c
+                                and lower(m.content) like lower(concat('%', :query, '%'))))
+            order by c.pinned desc, c.updatedAt desc
+            """)
+    List<Chat> search(@Param("query") String query);
+
     /** Bumps the chat's last-activity stamp so the sidebar ordering reflects new messages. */
     @Modifying
     @Transactional

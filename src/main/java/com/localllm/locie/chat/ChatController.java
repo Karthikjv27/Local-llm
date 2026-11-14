@@ -3,8 +3,11 @@ package com.localllm.locie.chat;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -64,5 +67,15 @@ public class ChatController {
     @PostMapping(value = "/{id}/regenerate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<ChatStreamEvent>> regenerate(@PathVariable UUID id) {
         return chats.regenerate(id);
+    }
+
+    @GetMapping(value = "/{id}/export", produces = "text/markdown;charset=UTF-8")
+    public ResponseEntity<String> export(@PathVariable UUID id) {
+        ChatExport document = chats.export(id);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(document.filename()).build().toString())
+                .contentType(MediaType.parseMediaType("text/markdown;charset=UTF-8"))
+                .body(document.markdown());
     }
 }

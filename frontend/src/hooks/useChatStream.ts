@@ -4,6 +4,8 @@ import type { MessageView } from '../api/types'
 
 interface StreamHandlers {
   onDone: (message: MessageView) => void
+  /** Called after an abort, so the caller can re-read the reply the server kept. */
+  onStopped?: () => void
 }
 
 export function useChatStream() {
@@ -44,6 +46,9 @@ export function useChatStream() {
         setStreaming(false)
         setText('')
         controller.current = null
+        if (abort.signal.aborted) {
+          handlers.onStopped?.()
+        }
       }
     },
     [],

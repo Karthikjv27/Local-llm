@@ -27,6 +27,8 @@ export const api = {
 
   chat: (id: string) => fetch(`/api/chats/${id}`).then(readJson<ChatDetail>),
 
+  exportChatUrl: (id: string) => `/api/chats/${encodeURIComponent(id)}/export`,
+
   metrics: () => fetch('/api/metrics').then(readJson<MetricsResponse>),
 
   commands: () => fetch('/api/commands').then(readJson<CommandDefinitionView[]>),

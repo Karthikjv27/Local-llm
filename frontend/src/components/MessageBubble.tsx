@@ -26,10 +26,11 @@ export function MessageBubble({ message, canRegenerate = false, onRegenerate }: 
         ) : message.content ? (
           <MarkdownText text={message.content} />
         ) : (
-          <p className="text-sm text-zinc-500">{message.error ? '' : '…'}</p>
+          <p className="text-sm text-zinc-500">{message.error || message.cancelled ? '' : '…'}</p>
         )}
 
         {message.error && <p className="mt-2 text-xs text-red-400">{message.error}</p>}
+        {message.cancelled && <p className="mt-1.5 text-[11px] text-amber-400/80">stopped</p>}
 
         {hasMetrics && (
           <p className="mt-1.5 text-[11px] text-zinc-500">

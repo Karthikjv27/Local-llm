@@ -12,5 +12,6 @@ public record ChatDetail(
         boolean pinned,
         Instant createdAt,
         Instant updatedAt,
+        ContextView context,
         List<MessageView> messages) {
 }

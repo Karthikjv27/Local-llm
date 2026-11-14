@@ -60,6 +60,10 @@ public class Message {
     @Column(columnDefinition = "text")
     private String error;
 
+    /** True when the user pressed Stop; the content holds what had been generated so far. */
+    @Column(nullable = false)
+    private boolean cancelled = false;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

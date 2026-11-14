@@ -7,13 +7,12 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,31 +21,36 @@ import reactor.core.scheduler.Schedulers;
 
 /**
  * Conversation storage plus streamed generation. Replies are persisted only after the stream
- * finishes (or fails), so a message in the database always matches what the user saw.
+ * finishes, fails or is stopped, so a message in the database always matches what the user saw.
  */
 @Slf4j
 @Service
 public class ChatService {
 
-    private static final int HISTORY_LIMIT = 40;
     private static final int TITLE_LIMIT = 60;
     private static final String DEFAULT_TITLE = "New chat";
 
     private final ChatRepository chats;
     private final MessageRepository messages;
     private final OllamaChatClient chatStream;
+    private final int contextTokens;
+    private final int historyLimit;
 
-    public ChatService(ChatRepository chats, MessageRepository messages, OllamaChatClient chatStream) {
+    public ChatService(ChatRepository chats, MessageRepository messages, OllamaChatClient chatStream,
+                       @Value("${locie.chat.context-tokens:4096}") int contextTokens,
+                       @Value("${locie.chat.history-limit:40}") int historyLimit) {
         this.chats = chats;
         this.messages = messages;
         this.chatStream = chatStream;
+        this.contextTokens = contextTokens;
+        this.historyLimit = historyLimit;
     }
 
     @Transactional(readOnly = true)
     public List<ChatSummary> list(String query) {
         List<Chat> found = query == null || query.isBlank()
                 ? chats.findByArchivedFalseOrderByPinnedDescUpdatedAtDesc()
-                : chats.findByArchivedFalseAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(query.trim());
+                : chats.search(query.trim());
         return found.stream().map(ChatSummary::from).toList();
     }
 
@@ -108,7 +112,7 @@ public class ChatService {
             chats.save(chat);
         }
 
-        return stream(chat, model, promptMessages(chatId, chat.getSystemPrompt()));
+        return stream(chat, model, contextWindow(chat).prompt());
     }
 
     /**
@@ -132,12 +136,63 @@ public class ChatService {
         }
 
         chats.touch(chatId, Instant.now());
-        return stream(chat, chat.getModel(), promptMessages(chatId, chat.getSystemPrompt()));
+        return stream(chat, chat.getModel(), contextWindow(chat).prompt());
+    }
+
+    /** The whole conversation as a Markdown document, ready to download. */
+    @Transactional(readOnly = true)
+    public ChatExport export(UUID id) {
+        Chat chat = requireChat(id);
+        List<Message> history = messages.findByChatIdOrderBySeqAsc(id);
+
+        StringBuilder markdown = new StringBuilder();
+        markdown.append("# ").append(chat.getTitle()).append("\n\n");
+        markdown.append("- **Model:** `").append(chat.getModel()).append("`\n");
+        markdown.append("- **Created:** ").append(chat.getCreatedAt()).append("\n");
+        markdown.append("- **Messages:** ").append(history.size()).append("\n\n---\n\n");
+
+        for (Message message : history) {
+            if (message.getRole() == MessageRole.USER) {
+                markdown.append("### You\n\n");
+            } else {
+                markdown.append("### Assistant");
+                if (message.getModel() != null && !message.getModel().isBlank()) {
+                    markdown.append(" · `").append(message.getModel()).append('`');
+                }
+                markdown.append("\n\n");
+            }
+
+            String text = message.getContent() == null ? "" : message.getContent();
+            markdown.append(text.isBlank() ? "_(empty)_" : text.strip()).append("\n\n");
+
+            if (message.getError() != null) {
+                markdown.append("> ").append(message.getError()).append("\n\n");
+            }
+            if (message.isCancelled()) {
+                markdown.append("_Stopped by user._\n\n");
+            }
+
+            List<String> stats = new ArrayList<>();
+            if (message.getCompletionTokens() != null) {
+                stats.add(message.getCompletionTokens() + " tokens");
+            }
+            if (message.getTokensPerSec() != null) {
+                stats.add(message.getTokensPerSec() + " tok/s");
+            }
+            if (message.getLatencyMs() != null) {
+                stats.add(message.getLatencyMs() + " ms");
+            }
+            if (!stats.isEmpty()) {
+                markdown.append("<sub>").append(String.join(" · ", stats)).append("</sub>\n\n");
+            }
+        }
+
+        return new ChatExport(fileName(chat.getTitle()), markdown.toString());
     }
 
     /** Streams a reply for an already-built prompt and persists the result. */
     private Flux<ServerSentEvent<ChatStreamEvent>> stream(Chat chat, String model,
-                                                          List<Map<String, String>> prompt) {
+                                                          List<java.util.Map<String, String>> prompt) {
         UUID chatId = chat.getId();
         return Flux.defer(() -> {
             StringBuilder answer = new StringBuilder();
@@ -173,7 +228,15 @@ public class ChatService {
                         }
                         log.warn("streaming reply failed for chat {}: {}", chatId, ex.toString());
                         return Flux.just(sse("error", ChatStreamEvent.error(messageOf(ex))));
-                    });
+                    })
+                    // The browser aborts the fetch when the user presses Stop. Reactor cancels
+                    // upstream, so the partial answer is written off the cancelling thread.
+                    .doOnCancel(() -> Schedulers.boundedElastic().schedule(() -> {
+                        if (saved.compareAndSet(false, true)) {
+                            persistStopped(chat, model, answer.toString());
+                            log.info("reply for chat {} stopped after {} characters", chatId, answer.length());
+                        }
+                    }));
         });
     }
 
@@ -217,6 +280,18 @@ public class ChatService {
         messages.save(message);
     }
 
+    /** Keeps what was generated before the user pressed Stop, marked so it is not mistaken for a failure. */
+    private void persistStopped(Chat chat, String model, String partial) {
+        Message message = new Message();
+        message.setChat(chat);
+        message.setRole(MessageRole.ASSISTANT);
+        message.setContent(partial == null ? "" : partial);
+        message.setModel(model);
+        message.setSeq(nextSeq(chat.getId()));
+        message.setCancelled(true);
+        messages.save(message);
+    }
+
     /**
      * Exactly Ollama's own counters: {@code eval_count} tokens produced in {@code eval_duration}.
      * No wall-clock estimate and no small-sample guard - the numbers come straight from the daemon.
@@ -234,44 +309,22 @@ public class ChatService {
         return ServerSentEvent.<ChatStreamEvent>builder().event(event).data(data).build();
     }
 
-    /** Chat history as Ollama's {@code messages} array, system prompt first. */
-    private List<Map<String, String>> promptMessages(UUID chatId, String systemPrompt) {
-        List<Map<String, String>> prompt = new ArrayList<>();
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            prompt.add(roleMessage("system", systemPrompt));
-        }
-
-        List<Message> stored = messages.findByChatIdOrderBySeqAsc(chatId);
-        List<Message> window = stored.size() > HISTORY_LIMIT
-                ? stored.subList(stored.size() - HISTORY_LIMIT, stored.size())
-                : stored;
-
-        for (Message message : window) {
-            String text = message.getContent() == null ? "" : message.getContent();
-            if (message.getRole() == MessageRole.USER) {
-                prompt.add(roleMessage("user", text));
-            } else if (message.getRole() == MessageRole.ASSISTANT && !text.isBlank()) {
-                prompt.add(roleMessage("assistant", text));
-            }
-        }
-        return prompt;
+    private ContextBudget.Window contextWindow(Chat chat) {
+        return contextWindow(chat, messages.findByChatIdOrderBySeqAsc(chat.getId()));
     }
 
-    private static Map<String, String> roleMessage(String role, String content) {
-        Map<String, String> message = new LinkedHashMap<>();
-        message.put("role", role);
-        message.put("content", content);
-        return message;
-    }
-
-    private int nextSeq(UUID chatId) {
-        return messages.findTopByChatIdOrderBySeqDesc(chatId).map(message -> message.getSeq() + 1).orElse(1);
+    /** Applies the message-count cut, then lets the token budget decide what actually fits. */
+    private ContextBudget.Window contextWindow(Chat chat, List<Message> history) {
+        List<Message> recent = history.size() > historyLimit
+                ? history.subList(history.size() - historyLimit, history.size())
+                : history;
+        return ContextBudget.fit(chat.getSystemPrompt(), recent, contextTokens);
     }
 
     private ChatDetail detail(Chat chat) {
-        List<MessageView> history = messages.findByChatIdOrderBySeqAsc(chat.getId()).stream()
-                .map(MessageView::from)
-                .toList();
+        List<Message> history = messages.findByChatIdOrderBySeqAsc(chat.getId());
+        ContextBudget.Window window = contextWindow(chat, history);
+        List<MessageView> messagesView = history.stream().map(MessageView::from).toList();
         return new ChatDetail(
                 chat.getId(),
                 chat.getTitle(),
@@ -280,7 +333,12 @@ public class ChatService {
                 chat.isPinned(),
                 chat.getCreatedAt(),
                 chat.getUpdatedAt(),
-                history);
+                window.view(),
+                messagesView);
+    }
+
+    private int nextSeq(UUID chatId) {
+        return messages.findTopByChatIdOrderBySeqDesc(chatId).map(message -> message.getSeq() + 1).orElse(1);
     }
 
     private Chat requireChat(UUID id) {
@@ -290,6 +348,19 @@ public class ChatService {
     private static String titleFrom(String content) {
         String compact = content.strip().replaceAll("\\s+", " ");
         return compact.length() <= TITLE_LIMIT ? compact : compact.substring(0, TITLE_LIMIT) + "…";
+    }
+
+    private static String fileName(String title) {
+        String base = title == null ? "" : title
+                .replaceAll("[^A-Za-z0-9._-]+", "-")
+                .replaceAll("^-+|-+$", "");
+        if (base.isBlank()) {
+            base = "chat";
+        }
+        if (base.length() > 60) {
+            base = base.substring(0, 60);
+        }
+        return base + ".md";
     }
 
     private static String blankToNull(String value) {

@@ -64,7 +64,7 @@ public final class CommandRunner {
             finished = false;
         }
         if (!finished) {
-            process.destroyForcibly();
+            killTree(process);
         }
         joinQuietly(outReader);
         joinQuietly(errReader);
@@ -78,6 +78,21 @@ public final class CommandRunner {
             }
         }
         return new Result(exitCode, stdout.get(), stderr.get(), !finished);
+    }
+
+    /**
+     * Kills children before the parent. A bare destroy() leaves helpers behind - `ollama pull` and
+     * the PowerShell probes both spawn child processes that would otherwise outlive the timeout.
+     */
+    private static void killTree(Process process) {
+        process.descendants().forEach(handle -> {
+            try {
+                handle.destroyForcibly();
+            } catch (RuntimeException ignored) {
+                // the child may have exited between listing and killing
+            }
+        });
+        process.destroyForcibly();
     }
 
     private static void joinQuietly(Thread thread) {

@@ -3,6 +3,7 @@ import { api } from './api/client'
 import type { ChatDetail, ChatSummary, ModelView } from './api/types'
 import { ChatView } from './components/ChatView'
 import { Composer } from './components/Composer'
+import { ContextMeter } from './components/ContextMeter'
 import { ModelPicker } from './components/ModelPicker'
 import { RightRail } from './components/RightRail'
 import { Sidebar } from './components/Sidebar'
@@ -129,6 +130,7 @@ export default function App() {
                   latencyMs: null,
                   tokensPerSec: null,
                   error: null,
+                  cancelled: false,
                   createdAt: new Date().toISOString(),
                 },
               ],
@@ -187,6 +189,24 @@ export default function App() {
     })
   }, [detail, streaming, regenerate, query, loadChats, loadModels])
 
+  /**
+   * Stop aborts the fetch; the server then persists the partial reply, so the chat is re-read a
+   * moment later to show what was actually kept.
+   */
+  const stopStreaming = useCallback(() => {
+    const chatId = detail?.id
+    stop()
+    if (!chatId) {
+      return
+    }
+    window.setTimeout(() => {
+      void api
+        .chat(chatId)
+        .then((fresh) => setDetail((current) => (current && current.id === chatId ? fresh : current)))
+        .catch(() => undefined)
+    }, 400)
+  }, [detail, stop])
+
   const problem = banner ?? error
 
   return (
@@ -210,7 +230,17 @@ export default function App() {
             onChange={changeModel}
           />
           <span className="truncate text-xs text-zinc-500">{detail?.title ?? 'No chat selected'}</span>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-3">
+            {detail && <ContextMeter context={detail.context} />}
+            {detail && (
+              <a
+                href={api.exportChatUrl(detail.id)}
+                download
+                className="rounded border border-zinc-800 px-2 py-1 text-[11px] text-zinc-400 transition hover:text-zinc-200"
+              >
+                Export
+              </a>
+            )}
             {streaming && <span className="text-[11px] text-emerald-400">generating…</span>}
             {!showMetrics && (
               <button
@@ -248,7 +278,7 @@ export default function App() {
           onRegenerate={regenerateLast}
         />
 
-        <Composer disabled={!detail} streaming={streaming} onSend={sendMessage} onStop={stop} />
+        <Composer disabled={!detail} streaming={streaming} onSend={sendMessage} onStop={stopStreaming} />
       </main>
 
       {showMetrics && (
