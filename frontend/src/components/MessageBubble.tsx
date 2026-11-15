@@ -12,6 +12,12 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, canRegenerate = false, onRegenerate, onTruncate }: MessageBubbleProps) {
   const isUser = message.role === 'USER'
+
+  // A pure tool-proposal turn stores an empty reply; it has no bubble of its own.
+  if (!isUser && !message.content && !message.error && !message.cancelled) {
+    return null
+  }
+
   const hasMetrics =
     !isUser &&
     (message.completionTokens != null || message.tokensPerSec != null || message.latencyMs != null)

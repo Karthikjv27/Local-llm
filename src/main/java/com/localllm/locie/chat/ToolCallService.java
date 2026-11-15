@@ -116,6 +116,21 @@ public class ToolCallService {
         return ToolCallView.from(toolCalls.save(call), catalogue());
     }
 
+    /**
+     * Marks the outcome as used by a continuation. A decided proposal can feed exactly one reply;
+     * the conditional update makes a repeated or raced request fail instead of answering twice.
+     */
+    @Transactional
+    public void claimForContinuation(UUID chatId, UUID callId) {
+        ToolCall call = require(chatId, callId);
+        if (call.getStatus() == ToolCallStatus.PENDING) {
+            throw new IllegalArgumentException("Approve or deny the command before continuing");
+        }
+        if (toolCalls.claimContinuation(callId, chatId) == 0) {
+            throw new IllegalArgumentException("This command result has already been used");
+        }
+    }
+
     @Transactional(readOnly = true)
     public ToolCall require(UUID chatId, UUID callId) {
         return toolCalls.findByIdAndChatId(callId, chatId)

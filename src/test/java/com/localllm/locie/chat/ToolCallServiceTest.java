@@ -114,4 +114,30 @@ class ToolCallServiceTest {
         call.setStatus(ToolCallStatus.PENDING);
         return call;
     }
+
+    @Test
+    void anUndecidedProposalCannotBeContinued() {
+        UUID chatId = UUID.randomUUID();
+        ToolCall call = pending(chatId, "ollama-ps");
+        when(repository.findByIdAndChatId(call.getId(), chatId)).thenReturn(java.util.Optional.of(call));
+
+        assertThatThrownBy(() -> service.claimForContinuation(chatId, call.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Approve or deny");
+    }
+
+    @Test
+    void aDecidedOutcomeFeedsExactlyOneContinuation() {
+        UUID chatId = UUID.randomUUID();
+        ToolCall call = pending(chatId, "ollama-ps");
+        call.setStatus(ToolCallStatus.APPROVED);
+        when(repository.findByIdAndChatId(call.getId(), chatId)).thenReturn(java.util.Optional.of(call));
+        when(repository.claimContinuation(call.getId(), chatId)).thenReturn(1, 0);
+
+        service.claimForContinuation(chatId, call.getId());
+
+        assertThatThrownBy(() -> service.claimForContinuation(chatId, call.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("already been used");
+    }
 }

@@ -61,6 +61,8 @@ export interface ToolCallView {
   error: string | null
   createdAt: string
   decidedAt: string | null
+  /** A proposal feeds at most one continuation. */
+  continued: boolean
 }
 
 export interface ChatDetail {

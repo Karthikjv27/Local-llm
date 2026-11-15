@@ -18,7 +18,8 @@ public record ToolCallView(
         String output,
         String error,
         Instant createdAt,
-        Instant decidedAt) {
+        Instant decidedAt,
+        boolean continued) {
 
     static ToolCallView from(ToolCall call, Map<String, ToolRunner.ToolInfo> catalogue) {
         ToolRunner.ToolInfo info = catalogue.get(call.getCommandId());
@@ -35,6 +36,7 @@ public record ToolCallView(
                 call.getOutput(),
                 call.getError(),
                 call.getCreatedAt(),
-                call.getDecidedAt());
+                call.getDecidedAt(),
+                call.isContinued());
     }
 }

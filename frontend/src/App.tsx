@@ -269,27 +269,31 @@ export default function App() {
 
   const continueTool = useCallback(
     async (callId: string) => {
-      if (!detail) {
+      if (!detail || detail.toolCalls.find((call) => call.id === callId)?.continued) {
         return
       }
       const chatId = detail.id
       setToolBusy(true)
-      await continueAfter(chatId, callId, {
-        onDone: (message) => {
-          setDetail((current) =>
-            current && current.id === chatId
-              ? { ...current, messages: [...current.messages, message] }
-              : current,
-          )
-          void refreshStats(chatId)
-          void loadChats(query, showArchived)
-          void api
-            .chat(chatId)
-            .then((fresh) => setDetail((current) => (current && current.id === chatId ? fresh : current)))
-            .catch(() => undefined)
-        },
-      })
-      setToolBusy(false)
+      try {
+        await continueAfter(chatId, callId, {
+          onDone: (message) => {
+            setDetail((current) =>
+              current && current.id === chatId
+                ? { ...current, messages: [...current.messages, message] }
+                : current,
+            )
+            void refreshStats(chatId)
+            void loadChats(query, showArchived)
+          },
+        })
+      } finally {
+        setToolBusy(false)
+        // Re-read so the card shows the server's single-use marker even if the stream failed.
+        void api
+          .chat(chatId)
+          .then((fresh) => setDetail((current) => (current && current.id === chatId ? fresh : current)))
+          .catch(() => undefined)
+      }
     },
     [detail, continueAfter, refreshStats, query, showArchived, loadChats],
   )

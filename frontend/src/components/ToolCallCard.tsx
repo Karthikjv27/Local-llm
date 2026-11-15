@@ -72,7 +72,7 @@ export function ToolCallCard({ call, busy, onApprove, onDeny, onContinue }: Tool
 
       {call.error && <p className="mt-2 text-[11px] text-red-400">{call.error}</p>}
 
-      {!pending && (
+      {!pending && !call.continued && (
         <div className="mt-2">
           <button
             type="button"
@@ -83,6 +83,10 @@ export function ToolCallCard({ call, busy, onApprove, onDeny, onContinue }: Tool
             Continue with this result
           </button>
         </div>
+      )}
+
+      {!pending && call.continued && (
+        <p className="mt-2 text-[11px] text-zinc-600">result already used — approve a new proposal instead</p>
       )}
     </div>
   )

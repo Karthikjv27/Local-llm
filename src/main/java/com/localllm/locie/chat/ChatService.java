@@ -230,10 +230,10 @@ public class ChatService {
      */
     public Flux<ServerSentEvent<ChatStreamEvent>> continueAfterTool(UUID chatId, UUID callId) {
         Chat chat = requireChat(chatId);
+        // Claims the outcome first: a second click (or a raced request) is rejected here rather than
+        // appending another answer.
+        toolCalls.claimForContinuation(chatId, callId);
         ToolCall call = toolCalls.require(chatId, callId);
-        if (call.getStatus() == ToolCallStatus.PENDING) {
-            throw new IllegalArgumentException("Approve or deny the command before continuing");
-        }
 
         List<Map<String, Object>> prompt = new ArrayList<>(contextWindow(chat).prompt());
         prompt.add(toolRequestMessage(call));

@@ -68,4 +68,8 @@ public class ToolCall {
 
     @Column(name = "decided_at")
     private Instant decidedAt;
+
+    /** True once a continuation has been generated from this outcome; it is single-use. */
+    @Column(nullable = false)
+    private boolean continued = false;
 }
