@@ -14,7 +14,7 @@ export function ModelPicker({ models, value, disabled, onChange }: ModelPickerPr
   const missingValue = value !== '' && !selected
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex shrink-0 items-center gap-2">
       <select
         value={value}
         disabled={disabled || models.length === 0}

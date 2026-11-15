@@ -365,7 +365,7 @@ export default function App() {
             disabled={!detail || streaming}
             onChange={changeModel}
           />
-          <span className="truncate text-xs text-zinc-500">{detail?.title ?? 'No chat selected'}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-zinc-500">{detail?.title ?? 'No chat selected'}</span>
           <div className="ml-auto flex shrink-0 items-center gap-3">
             {stats && stats.messages > 0 && (
               <span className="hidden items-center text-[11px] text-zinc-500 xl:flex">
