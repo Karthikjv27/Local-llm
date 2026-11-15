@@ -61,7 +61,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Context budget** | The prompt is trimmed to a token budget newest-first, with a meter showing what the next request will send |
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
-| **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, and every proposal — approved, denied or rejected — is recorded |
+| **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, each proposal feeds exactly one continuation, and every proposal — approved, denied or rejected — is recorded |
 | **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
@@ -307,7 +307,7 @@ tool_calls(id uuid pk, chat_id uuid → chats on delete cascade,
            status text check in (PENDING, APPROVED, DENIED, FAILED),
            command_run_id uuid → command_runs on delete set null,
            exit_code int, duration_ms int, output text, error text,
-           created_at timestamptz, decided_at timestamptz)
+           continued bool, created_at timestamptz, decided_at timestamptz)
 ```
 
 Why it looks like this:
@@ -353,7 +353,7 @@ Why it looks like this:
 | GET | `/api/chats/{id}/stats` | Message counts, token totals, average tok/s and latency, failures and stops |
 | POST | `/api/chats/{id}/tool-calls/{callId}/approve` | Runs a proposed command — re-validated against the allowlist |
 | POST | `/api/chats/{id}/tool-calls/{callId}/deny` | Declines it; nothing is executed |
-| POST | `/api/chats/{id}/tool-calls/{callId}/continue` | Model answers using the result — **SSE** |
+| POST | `/api/chats/{id}/tool-calls/{callId}/continue` | Model answers using the result once — **SSE**; a second use is `400` |
 | GET | `/api/commands` | The allowlist, with timeouts and destructive flags |
 | POST | `/api/commands/run` | Run a command to completion, return the saved run |
 | POST | `/api/commands/run/stream` | Run a command — **SSE**: `line`*, `done` |
@@ -467,7 +467,7 @@ cd frontend && npm run lint    # oxlint
 | `ContextBudgetTest` (5 tests) | Everything fits; oldest dropped first; a window never starts with a reply; the system prompt consumes budget; the four-chars-per-token estimate |
 | `ChatStatsTest` (4 tests) | Empty history, rate/latency averages, failed vs stopped counts, and first/last message timestamps |
 | `ActiveStreamsTest` (4 tests) | A registered stream can be stopped, an idle stop is a no-op, closing unregisters, and an old close cannot remove a newer registration |
-| `ToolCallServiceTest` (6 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final |
+| `ToolCallServiceTest` (8 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final; an undecided proposal cannot continue, and a decided one only once |
 | `CatalogToolRunnerTest` (6 tests) | The tool schema's enum is exactly the allowlist, destructive and argument-taking commands are described, and running rejects an unknown id or a flag-shaped argument |
 | `OllamaChatClientTest` (4 tests) | Tool calls parse whether Ollama sends arguments as an object or a JSON string; plain and counter-only frames still parse |
 | `ArchitectureTest` (6 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
