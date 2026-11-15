@@ -37,8 +37,20 @@ class OllamaChatClient {
         this.mapper = mapper;
     }
 
-    Flux<LlmProvider.Chunk> stream(String model, List<Map<String, String>> messages) {
-        Map<String, Object> payload = Map.of("model", model, "messages", messages, "stream", true);
+    Flux<LlmProvider.Chunk> stream(String model, List<Map<String, Object>> messages,
+                                   List<LlmProvider.Tool> tools) {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("model", model);
+        payload.put("messages", messages);
+        payload.put("stream", true);
+        if (!tools.isEmpty()) {
+            payload.put("tools", tools.stream()
+                    .map(tool -> Map.of("type", "function", "function", Map.of(
+                            "name", tool.name(),
+                            "description", tool.description(),
+                            "parameters", tool.parameters())))
+                    .toList());
+        }
 
         return Flux.defer(() -> {
             ByteArrayOutputStream carry = new ByteArrayOutputStream();
@@ -98,7 +110,7 @@ class OllamaChatClient {
         return rest.isEmpty() ? List.of() : List.of(rest);
     }
 
-    private LlmProvider.Chunk parse(String line) {
+    LlmProvider.Chunk parse(String line) {
         JsonNode node;
         try {
             node = mapper.readTree(line);
@@ -116,7 +128,42 @@ class OllamaChatClient {
                 intOrNull(node, "eval_count"),
                 durationOrNull(node, "eval_duration"),
                 durationOrNull(node, "load_duration"),
-                durationOrNull(node, "total_duration"));
+                durationOrNull(node, "total_duration"),
+                toolCalls(node.path("message").path("tool_calls")));
+    }
+
+    /**
+     * Ollama returns {@code tool_calls[].function.arguments} as an object, but older builds send a
+     * JSON string; both are accepted so a version bump cannot break a proposal silently.
+     */
+    private List<LlmProvider.ToolCall> toolCalls(JsonNode calls) {
+        if (!calls.isArray()) {
+            return List.of();
+        }
+        List<LlmProvider.ToolCall> parsed = new ArrayList<>();
+        for (JsonNode call : calls) {
+            JsonNode function = call.path("function");
+            String name = function.path("name").asText("");
+            if (name.isEmpty()) {
+                continue;
+            }
+            parsed.add(new LlmProvider.ToolCall(name, arguments(function.path("arguments"))));
+        }
+        return List.copyOf(parsed);
+    }
+
+    private Map<String, Object> arguments(JsonNode node) {
+        if (node.isObject()) {
+            return mapper.convertValue(node, Map.class);
+        }
+        if (node.isTextual() && !node.asText().isBlank()) {
+            try {
+                return mapper.readValue(node.asText(), Map.class);
+            } catch (JacksonException ex) {
+                throw new OllamaUnavailableException("Ollama sent unreadable tool arguments", ex);
+            }
+        }
+        return Map.of();
     }
 
     private static Integer intOrNull(JsonNode node, String field) {

@@ -30,23 +30,28 @@ import reactor.core.scheduler.Schedulers;
 public class ChatService {
 
     private static final int TITLE_LIMIT = 60;
+    private static final int TOOL_OUTPUT_LIMIT = 4_000;
     private static final String DEFAULT_TITLE = "New chat";
 
     private final ChatRepository chats;
     private final MessageRepository messages;
     private final LlmProvider llm;
     private final ActiveStreams activeStreams;
+    private final ToolRunner toolRunner;
+    private final ToolCallService toolCalls;
     private final int contextTokens;
     private final int historyLimit;
 
     public ChatService(ChatRepository chats, MessageRepository messages, LlmProvider llm,
-                       ActiveStreams activeStreams,
+                       ActiveStreams activeStreams, ToolRunner toolRunner, ToolCallService toolCalls,
                        @Value("${locie.chat.context-tokens:4096}") int contextTokens,
                        @Value("${locie.chat.history-limit:40}") int historyLimit) {
         this.chats = chats;
         this.messages = messages;
         this.llm = llm;
         this.activeStreams = activeStreams;
+        this.toolRunner = toolRunner;
+        this.toolCalls = toolCalls;
         this.contextTokens = contextTokens;
         this.historyLimit = historyLimit;
     }
@@ -125,7 +130,7 @@ public class ChatService {
             chats.save(chat);
         }
 
-        return stream(chat, model, contextWindow(chat).prompt());
+        return stream(chat, model, contextWindow(chat).prompt(), toolRunner.tools());
     }
 
     /**
@@ -149,7 +154,7 @@ public class ChatService {
         }
 
         chats.touch(chatId, Instant.now());
-        return stream(chat, chat.getModel(), contextWindow(chat).prompt());
+        return stream(chat, chat.getModel(), contextWindow(chat).prompt(), toolRunner.tools());
     }
 
     /** Signals the reply currently streaming in this chat to stop; false when nothing is running. */
@@ -219,6 +224,58 @@ public class ChatService {
         return ChatStats.from(id, messages.findByChatIdOrderBySeqAsc(id));
     }
 
+    /**
+     * Continues the conversation after a proposed command was approved or denied, showing the model
+     * what was decided and (when approved) what the command printed.
+     */
+    public Flux<ServerSentEvent<ChatStreamEvent>> continueAfterTool(UUID chatId, UUID callId) {
+        Chat chat = requireChat(chatId);
+        ToolCall call = toolCalls.require(chatId, callId);
+        if (call.getStatus() == ToolCallStatus.PENDING) {
+            throw new IllegalArgumentException("Approve or deny the command before continuing");
+        }
+
+        List<Map<String, Object>> prompt = new ArrayList<>(contextWindow(chat).prompt());
+        prompt.add(toolRequestMessage(call));
+        prompt.add(toolResultMessage(call));
+        // No tools on the continuation: one approval covers one command, so the model answers
+        // instead of proposing another round.
+        return stream(chat, chat.getModel(), prompt, List.of());
+    }
+
+    private static Map<String, Object> toolRequestMessage(ToolCall call) {
+        Map<String, Object> arguments = new java.util.LinkedHashMap<>();
+        arguments.put("command_id", call.getCommandId());
+        if (call.getArgs() != null) {
+            arguments.put("args", call.getArgs());
+        }
+        return Map.of(
+                "role", "assistant",
+                "content", "",
+                "tool_calls", List.of(Map.of("function",
+                        Map.of("name", ToolRunner.TOOL_NAME, "arguments", arguments))));
+    }
+
+    private static Map<String, Object> toolResultMessage(ToolCall call) {
+        String body = switch (call.getStatus()) {
+            case DENIED -> "The user denied this command. Nothing was executed.";
+            case FAILED -> "The command could not run: "
+                    + (call.getError() == null ? "unknown error" : call.getError());
+            default -> "command: " + call.getCommandId()
+                    + (call.getArgs() == null ? "" : " " + call.getArgs())
+                    + "\nstatus: " + (call.getExitCode() == null ? "unknown" : "exit " + call.getExitCode())
+                    + "\n\n" + (call.getOutput() == null ? "(no output)" : limit(call.getOutput()));
+        };
+        return Map.of("role", "tool", "tool_name", ToolRunner.TOOL_NAME, "content", body);
+    }
+
+    /** Command output is trimmed before it reaches the prompt, so one command cannot eat the window. */
+    private static String limit(String output) {
+        return output.length() <= TOOL_OUTPUT_LIMIT
+                ? output
+                : output.substring(0, TOOL_OUTPUT_LIMIT) + "\n… (truncated)";
+    }
+
     /** The whole conversation as a Markdown document, ready to download. */
     @Transactional(readOnly = true)
     public ChatExport export(UUID id) {
@@ -272,22 +329,29 @@ public class ChatService {
 
     /** Streams a reply for an already-built prompt and persists the result. */
     private Flux<ServerSentEvent<ChatStreamEvent>> stream(Chat chat, String model,
-                                                          List<Map<String, String>> prompt) {
+                                                          List<Map<String, Object>> prompt,
+                                                          List<LlmProvider.Tool> tools) {
         UUID chatId = chat.getId();
         return Flux.defer(() -> {
             ActiveStreams.Registration registration = activeStreams.register(chatId);
             StringBuilder answer = new StringBuilder();
             AtomicReference<LlmProvider.Chunk> finalChunk = new AtomicReference<>();
+            // Ollama sends tool calls on their own frame, before the final timing frame, so they
+            // are collected from every chunk instead of only the done one.
+            AtomicReference<List<LlmProvider.ToolCall>> proposed = new AtomicReference<>(List.of());
             AtomicBoolean saved = new AtomicBoolean(false);
             long startedAt = System.nanoTime();
 
-            return llm.stream(model, prompt)
+            return llm.stream(model, prompt, tools)
                     // A stop request flips this flag; the upstream call is then cancelled here, so
                     // Stop works even when the browser never aborts its own request.
                     .takeWhile(chunk -> !registration.stopped())
                     .doOnNext(chunk -> {
                         if (chunk.done()) {
                             finalChunk.set(chunk);
+                        }
+                        if (!chunk.toolCalls().isEmpty()) {
+                            proposed.set(chunk.toolCalls());
                         }
                     })
                     .mapNotNull(chunk -> {
@@ -306,7 +370,16 @@ public class ChatService {
                         MessageView stored = registration.stopped()
                                 ? persistStopped(chat, model, answer.toString())
                                 : persistAnswer(chat, model, answer.toString(), finalChunk.get(), startedAt);
-                        return Flux.just(sse("done", ChatStreamEvent.done(stored)));
+
+                        List<ServerSentEvent<ChatStreamEvent>> events = new ArrayList<>();
+                        if (!registration.stopped() && !proposed.get().isEmpty()) {
+                            // Recorded before the user sees them, so a refresh cannot lose a proposal.
+                            toolCalls.record(chat, stored.id(), proposed.get()).stream()
+                                    .map(view -> sse("tool", ChatStreamEvent.tool(view)))
+                                    .forEach(events::add);
+                        }
+                        events.add(sse("done", ChatStreamEvent.done(stored)));
+                        return Flux.fromIterable(events);
                     }))
                     .onErrorResume(ex -> {
                         if (saved.compareAndSet(false, true)) {
@@ -422,7 +495,8 @@ public class ChatService {
                 chat.getCreatedAt(),
                 chat.getUpdatedAt(),
                 window.view(),
-                messagesView);
+                messagesView,
+                toolCalls.list(chat.getId()));
     }
 
     private int nextSeq(UUID chatId) {

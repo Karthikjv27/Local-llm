@@ -8,6 +8,7 @@ import type {
   MetricsResponse,
   ModelView,
   StreamEvent,
+  ToolCallView,
 } from './types'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
@@ -82,6 +83,17 @@ export const api = {
   truncateChat: (id: string, messageId: string) =>
     fetch(`/api/chats/${id}/messages/${encodeURIComponent(messageId)}`, { method: 'DELETE' }).then(
       readJson<ChatDetail>,
+    ),
+
+  /** Runs a proposed command. The server re-checks the allowlist before executing. */
+  approveToolCall: (chatId: string, callId: string) =>
+    fetch(`/api/chats/${chatId}/tool-calls/${callId}/approve`, { method: 'POST' }).then(
+      readJson<ToolCallView>,
+    ),
+
+  denyToolCall: (chatId: string, callId: string) =>
+    fetch(`/api/chats/${chatId}/tool-calls/${callId}/deny`, { method: 'POST' }).then(
+      readJson<ToolCallView>,
     ),
 }
 
@@ -164,6 +176,21 @@ export async function regenerateReply(
   signal: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`/api/chats/${chatId}/regenerate`, {
+    method: 'POST',
+    headers: { Accept: 'text/event-stream' },
+    signal,
+  })
+  await consume(response, onEvent)
+}
+
+/** Streams the model's answer to a command it proposed, once the user has decided. */
+export async function continueAfterTool(
+  chatId: string,
+  callId: string,
+  onEvent: (event: StreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/chats/${chatId}/tool-calls/${callId}/continue`, {
     method: 'POST',
     headers: { Accept: 'text/event-stream' },
     signal,

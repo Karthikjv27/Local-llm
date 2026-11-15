@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { ChatDetail } from '../api/types'
 import { MarkdownText } from './MarkdownText'
 import { MessageBubble } from './MessageBubble'
+import { ToolCallCard } from './ToolCallCard'
 
 interface ChatViewProps {
   detail: ChatDetail | null
@@ -10,9 +11,24 @@ interface ChatViewProps {
   onStart: () => void
   onRegenerate: () => void
   onTruncate: (messageId: string) => void
+  onApproveTool: (id: string) => void
+  onDenyTool: (id: string) => void
+  onContinueTool: (id: string) => void
+  toolBusy: boolean
 }
 
-export function ChatView({ detail, streaming, streamText, onStart, onRegenerate, onTruncate }: ChatViewProps) {
+export function ChatView({
+  detail,
+  streaming,
+  streamText,
+  onStart,
+  onRegenerate,
+  onTruncate,
+  onApproveTool,
+  onDenyTool,
+  onContinueTool,
+  toolBusy,
+}: ChatViewProps) {
   const bottom = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -63,6 +79,21 @@ export function ChatView({ detail, streaming, streamText, onStart, onRegenerate,
             <div className="max-w-[46rem] rounded-lg bg-zinc-900 px-3.5 py-2.5 ring-1 ring-zinc-800">
               {streamText ? <MarkdownText text={streamText} /> : <p className="text-sm text-zinc-500">thinking…</p>}
             </div>
+          </div>
+        )}
+
+        {detail.toolCalls.length > 0 && (
+          <div className="mt-1 flex flex-col gap-2">
+            {detail.toolCalls.map((call) => (
+              <ToolCallCard
+                key={call.id}
+                call={call}
+                busy={toolBusy || streaming}
+                onApprove={onApproveTool}
+                onDeny={onDenyTool}
+                onContinue={onContinueTool}
+              />
+            ))}
           </div>
         )}
 

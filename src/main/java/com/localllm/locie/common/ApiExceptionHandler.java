@@ -43,6 +43,13 @@ public class ApiExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(ToolCallNotFoundException.class)
+    public ProblemDetail toolCallNotFound(ToolCallNotFoundException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setTitle("Tool call not found");
+        return problem;
+    }
+
     @ExceptionHandler(MessageNotFoundException.class)
     public ProblemDetail messageNotFound(MessageNotFoundException ex) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());

@@ -44,6 +44,25 @@ export interface ContextView {
   trimmed: boolean
 }
 
+export type ToolCallStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'FAILED'
+
+/** A command the model proposed, and what the user decided about it. */
+export interface ToolCallView {
+  id: string
+  commandId: string
+  label: string
+  args: string | null
+  destructive: boolean
+  status: ToolCallStatus
+  commandRunId: string | null
+  exitCode: number | null
+  durationMs: number | null
+  output: string | null
+  error: string | null
+  createdAt: string
+  decidedAt: string | null
+}
+
 export interface ChatDetail {
   id: string
   title: string
@@ -55,6 +74,7 @@ export interface ChatDetail {
   updatedAt: string
   context: ContextView
   messages: MessageView[]
+  toolCalls: ToolCallView[]
 }
 
 export interface ChatStats {
@@ -74,6 +94,7 @@ export interface ChatStats {
 
 export type StreamEvent =
   | { type: 'token'; text: string }
+  | { type: 'tool'; tool: ToolCallView }
   | { type: 'done'; message: MessageView }
   | { type: 'error'; error: string }
 

@@ -24,8 +24,9 @@ export default function App() {
   const [banner, setBanner] = useState<string | null>(null)
   const [showMetrics, setShowMetrics] = useState(true)
 
-  const { streaming, text, error, send, regenerate, stop, dismissError } = useChatStream()
+  const { streaming, text, error, send, regenerate, continueAfter, stop, dismissError } = useChatStream()
   const { metrics, history } = useMetrics()
+  const [toolBusy, setToolBusy] = useState(false)
 
   const loadModels = useCallback(async () => {
     try {
@@ -240,6 +241,59 @@ export default function App() {
   }, [detail, streaming, regenerate, query, showArchived, loadChats, loadModels, refreshStats])
 
   /** Removes one message and everything after it, so the conversation can be rewound. */
+  const decideTool = useCallback(
+    async (callId: string, approve: boolean) => {
+      if (!detail) {
+        return
+      }
+      const chatId = detail.id
+      setToolBusy(true)
+      try {
+        const updated = approve
+          ? await api.approveToolCall(chatId, callId)
+          : await api.denyToolCall(chatId, callId)
+        setDetail((current) =>
+          current && current.id === chatId
+            ? { ...current, toolCalls: current.toolCalls.map((call) => (call.id === callId ? updated : call)) }
+            : current,
+        )
+        void loadChats(query, showArchived)
+      } catch (cause) {
+        setBanner(cause instanceof Error ? cause.message : 'Could not resolve the command')
+      } finally {
+        setToolBusy(false)
+      }
+    },
+    [detail, query, showArchived, loadChats],
+  )
+
+  const continueTool = useCallback(
+    async (callId: string) => {
+      if (!detail) {
+        return
+      }
+      const chatId = detail.id
+      setToolBusy(true)
+      await continueAfter(chatId, callId, {
+        onDone: (message) => {
+          setDetail((current) =>
+            current && current.id === chatId
+              ? { ...current, messages: [...current.messages, message] }
+              : current,
+          )
+          void refreshStats(chatId)
+          void loadChats(query, showArchived)
+          void api
+            .chat(chatId)
+            .then((fresh) => setDetail((current) => (current && current.id === chatId ? fresh : current)))
+            .catch(() => undefined)
+        },
+      })
+      setToolBusy(false)
+    },
+    [detail, continueAfter, refreshStats, query, showArchived, loadChats],
+  )
+
   const truncateFrom = useCallback(
     async (messageId: string) => {
       if (!detail || streaming) {
@@ -372,6 +426,10 @@ export default function App() {
           onStart={startChat}
           onRegenerate={regenerateLast}
           onTruncate={truncateFrom}
+          onApproveTool={(id) => void decideTool(id, true)}
+          onDenyTool={(id) => void decideTool(id, false)}
+          onContinueTool={(id) => void continueTool(id)}
+          toolBusy={toolBusy}
         />
 
         <Composer disabled={!detail} streaming={streaming} onSend={sendMessage} onStop={stopStreaming} />

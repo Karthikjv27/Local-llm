@@ -26,9 +26,11 @@ import reactor.core.publisher.Flux;
 public class ChatController {
 
     private final ChatService chats;
+    private final ToolCallService toolCalls;
 
-    public ChatController(ChatService chats) {
+    public ChatController(ChatService chats, ToolCallService toolCalls) {
         this.chats = chats;
+        this.toolCalls = toolCalls;
     }
 
     @GetMapping
@@ -93,6 +95,24 @@ public class ChatController {
     @GetMapping("/{id}/stats")
     public ChatStats stats(@PathVariable UUID id) {
         return chats.stats(id);
+    }
+
+    /** Runs a command the model proposed. The allowlist is re-checked server-side. */
+    @PostMapping("/{id}/tool-calls/{callId}/approve")
+    public ToolCallView approve(@PathVariable UUID id, @PathVariable UUID callId) {
+        return toolCalls.approve(id, callId);
+    }
+
+    @PostMapping("/{id}/tool-calls/{callId}/deny")
+    public ToolCallView deny(@PathVariable UUID id, @PathVariable UUID callId) {
+        return toolCalls.deny(id, callId);
+    }
+
+    /** Streams the model's answer after a command was approved or denied — **SSE**. */
+    @PostMapping(value = "/{id}/tool-calls/{callId}/continue", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<ChatStreamEvent>> continueAfterTool(@PathVariable UUID id,
+                                                                    @PathVariable UUID callId) {
+        return chats.continueAfterTool(id, callId);
     }
 
     @GetMapping(value = "/{id}/export", produces = "text/markdown;charset=UTF-8")

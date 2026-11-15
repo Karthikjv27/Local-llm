@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { regenerateReply, streamMessage } from '../api/client'
+import { continueAfterTool, regenerateReply, streamMessage } from '../api/client'
 import type { MessageView } from '../api/types'
 
 interface StreamHandlers {
@@ -66,9 +66,16 @@ export function useChatStream() {
     [run],
   )
 
+  /** Streams the model's answer after a proposed command was approved or denied. */
+  const continueAfter = useCallback(
+    (chatId: string, callId: string, handlers: StreamHandlers) =>
+      run((emit, signal) => continueAfterTool(chatId, callId, emit, signal), handlers),
+    [run],
+  )
+
   const stop = useCallback(() => controller.current?.abort(), [])
 
   const dismissError = useCallback(() => setError(null), [])
 
-  return { streaming, text, error, send, regenerate, stop, dismissError }
+  return { streaming, text, error, send, regenerate, continueAfter, stop, dismissError }
 }

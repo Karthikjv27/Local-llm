@@ -37,7 +37,7 @@ public final class ContextBudget {
      * @param considered    messages offered, after the history-limit cut
      * @param trimmed       whether anything was dropped
      */
-    public record Window(List<Map<String, String>> prompt, int usedTokens, int limitTokens,
+    public record Window(List<Map<String, Object>> prompt, int usedTokens, int limitTokens,
                          int included, int considered, boolean trimmed) {
 
         public ContextView view() {
@@ -54,7 +54,7 @@ public final class ContextBudget {
         String system = systemPrompt == null || systemPrompt.isBlank() ? null : systemPrompt;
         int used = system == null ? 0 : estimate(system) + MESSAGE_OVERHEAD;
 
-        Deque<Map<String, String>> selected = new ArrayDeque<>();
+        Deque<Map<String, Object>> selected = new ArrayDeque<>();
         int considered = 0;
 
         for (int i = history.size() - 1; i >= 0; i--) {
@@ -73,11 +73,11 @@ public final class ContextBudget {
         }
 
         while (!selected.isEmpty() && "assistant".equals(selected.peekFirst().get("role"))) {
-            Map<String, String> dropped = selected.removeFirst();
-            used -= estimate(dropped.get("content")) + MESSAGE_OVERHEAD;
+            Map<String, Object> dropped = selected.removeFirst();
+            used -= estimate(String.valueOf(dropped.get("content"))) + MESSAGE_OVERHEAD;
         }
 
-        List<Map<String, String>> prompt = new ArrayList<>(selected.size() + 1);
+        List<Map<String, Object>> prompt = new ArrayList<>(selected.size() + 1);
         if (system != null) {
             prompt.add(Map.of("role", "system", "content", system));
         }

@@ -14,5 +14,6 @@ public record ChatDetail(
         Instant createdAt,
         Instant updatedAt,
         ContextView context,
-        List<MessageView> messages) {
+        List<MessageView> messages,
+        List<ToolCallView> toolCalls) {
 }

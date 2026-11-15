@@ -30,8 +30,8 @@ public class OllamaLlmProvider implements LlmProvider {
     }
 
     @Override
-    public Flux<Chunk> stream(String model, List<Map<String, String>> messages) {
-        return chat.stream(model, messages);
+    public Flux<Chunk> stream(String model, List<Map<String, Object>> messages, List<Tool> tools) {
+        return chat.stream(model, messages, tools);
     }
 
     @Override

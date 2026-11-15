@@ -61,6 +61,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Context budget** | The prompt is trimmed to a token budget newest-first, with a meter showing what the next request will send |
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
+| **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, and every proposal — approved, denied or rejected — is recorded |
 | **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
@@ -299,6 +300,14 @@ command_runs(id uuid pk, chat_id uuid → chats on delete set null,
              status text check in (RUNNING, OK, FAILED, TIMEOUT, REJECTED),
              exit_code int, stdout text, stderr text,
              started_at timestamptz, finished_at timestamptz, duration_ms int)
+
+tool_calls(id uuid pk, chat_id uuid → chats on delete cascade,
+           message_id uuid → messages on delete set null,
+           command_id text, args text,
+           status text check in (PENDING, APPROVED, DENIED, FAILED),
+           command_run_id uuid → command_runs on delete set null,
+           exit_code int, duration_ms int, output text, error text,
+           created_at timestamptz, decided_at timestamptz)
 ```
 
 Why it looks like this:
@@ -315,6 +324,9 @@ Why it looks like this:
   `messages.content`, because `%term%` matching cannot use a btree.
 - **`cancelled`** distinguishes "the user pressed Stop" from "generation failed" — both keep the partial text,
   but only one is an error.
+- **Tool proposals are their own table.** A pending approval has to survive a refresh, and a denied proposal is
+  still evidence of what the model asked for. The command it produces is a normal `command_runs` row, so the
+  audit trail stays in one place and deleting a chat does not erase it.
 
 ---
 
@@ -339,6 +351,9 @@ Why it looks like this:
 | POST | `/api/chats/{id}/fork?fromSeq=` | Copy the conversation (optionally up to a sequence number) into a new chat |
 | DELETE | `/api/chats/{id}/messages/{messageId}` | Rewind: remove this message and everything after it |
 | GET | `/api/chats/{id}/stats` | Message counts, token totals, average tok/s and latency, failures and stops |
+| POST | `/api/chats/{id}/tool-calls/{callId}/approve` | Runs a proposed command — re-validated against the allowlist |
+| POST | `/api/chats/{id}/tool-calls/{callId}/deny` | Declines it; nothing is executed |
+| POST | `/api/chats/{id}/tool-calls/{callId}/continue` | Model answers using the result — **SSE** |
 | GET | `/api/commands` | The allowlist, with timeouts and destructive flags |
 | POST | `/api/commands/run` | Run a command to completion, return the saved run |
 | POST | `/api/commands/run/stream` | Run a command — **SSE**: `line`*, `done` |
@@ -377,7 +392,11 @@ The interesting surface is the command console, because it runs programs.
 4. **Bounded execution.** Per-command timeout, 256 KB output cap, no stdin.
 5. **Destructive actions are marked** (`ollama rm`) and the UI requires an explicit confirmation.
 6. **Everything is recorded** in `command_runs`, including exit code, duration and output.
-7. **Secrets stay out of git.** `application-local.properties` is ignored; `.gitignore` also covers `target/`,
+7. **Model-proposed commands need approval.** The model sees one `run_command` tool whose `command_id` enum is
+   generated from the catalog, so it never learns about anything outside the allowlist. A proposal is stored as
+   `tool_calls` (`PENDING`) and executes only when the user approves it in the UI; approval re-validates the id and
+   the argument against the catalog, so a tampered row cannot widen the allowlist. Denials are recorded too.
+8. **Secrets stay out of git.** `application-local.properties` is ignored; `.gitignore` also covers `target/`,
    `node_modules/`, `dist/`, `.env` and JVM crash logs.
 
 Known gaps (documented, not accidental): the server binds all interfaces and there is no authentication, so it is
@@ -448,6 +467,9 @@ cd frontend && npm run lint    # oxlint
 | `ContextBudgetTest` (5 tests) | Everything fits; oldest dropped first; a window never starts with a reply; the system prompt consumes budget; the four-chars-per-token estimate |
 | `ChatStatsTest` (4 tests) | Empty history, rate/latency averages, failed vs stopped counts, and first/last message timestamps |
 | `ActiveStreamsTest` (4 tests) | A registered stream can be stopped, an idle stop is a no-op, closing unregisters, and an old close cannot remove a newer registration |
+| `ToolCallServiceTest` (6 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final |
+| `CatalogToolRunnerTest` (6 tests) | The tool schema's enum is exactly the allowlist, destructive and argument-taking commands are described, and running rejects an unknown id or a flag-shaped argument |
+| `OllamaChatClientTest` (4 tests) | Tool calls parse whether Ollama sends arguments as an object or a JSON string; plain and counter-only frames still parse |
 | `ArchitectureTest` (6 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
 
 CI runs the same gates on every push (`.github/workflows/ci.yml`): `mvn verify` for the backend against a
@@ -543,6 +565,10 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 - No authentication, binds all interfaces.
 - No pagination for chats, messages or command history; command output is stored up to 256 KB per run.
 - Search is substring matching, so it does not stem or rank results.
+- Tool calling depends on the model's chat template. `qwen2.5-coder:3b` (the only tools-capable model installed here)
+  narrates the call as text instead of emitting `tool_calls`, so the loop was verified against a stub that returns
+  Ollama's real wire shape. A model with working tool templates (`llama3.1`, `qwen2.5` 7B+) is needed for the model
+  itself to drive it.
 - No frontend tests.
 
 **Roadmap, in the order I'd do it**
