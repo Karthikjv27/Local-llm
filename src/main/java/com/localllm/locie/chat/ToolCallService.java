@@ -3,6 +3,7 @@ package com.localllm.locie.chat;
 import com.localllm.locie.common.ToolCallNotFoundException;
 import com.localllm.locie.model.LlmProvider;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class ToolCallService {
 
     private static final int MAX_RESULT_CHARS = 8_000;
+    private static final String ALREADY_DECIDED = "This command has already been decided";
+    private static final String STALE =
+            "This proposal's turn is gone; ask the model to propose the command again";
 
     private final ToolCallRepository toolCalls;
     private final MessageRepository messages;
@@ -83,10 +87,15 @@ public class ToolCallService {
 
     @Transactional
     public ToolCallView approve(UUID chatId, UUID callId) {
-        ToolCall call = require(chatId, callId);
-        if (call.getStatus() != ToolCallStatus.PENDING) {
-            throw new IllegalArgumentException("This command has already been decided");
+        ToolCall call = requireDecidable(chatId, callId);
+        Instant decidedAt = Instant.now();
+        // Claims the decision before running anything: a second approve, or a deny racing it,
+        // matches no row and is rejected instead of executing the command twice.
+        if (toolCalls.decide(callId, chatId, ToolCallStatus.PENDING, ToolCallStatus.APPROVED, decidedAt) == 0) {
+            throw new IllegalArgumentException(ALREADY_DECIDED);
         }
+        call.setStatus(ToolCallStatus.APPROVED);
+        call.setDecidedAt(decidedAt);
         try {
             ToolRunner.ToolResult result = runner.run(call.getCommandId(), call.getArgs(), chatId);
             call.setCommandRunId(result.runId());
@@ -98,22 +107,35 @@ public class ToolCallService {
         } catch (RuntimeException ex) {
             // The allowlist rejected the stored proposal, or the runner failed before starting.
             call.setStatus(ToolCallStatus.FAILED);
+            call.setCommandRunId(null);
             call.setError(trim(messageOf(ex)));
             log.warn("approved tool call {} could not run: {}", callId, ex.toString());
         }
-        call.setDecidedAt(Instant.now());
         return ToolCallView.from(toolCalls.save(call), catalogue());
     }
 
     @Transactional
     public ToolCallView deny(UUID chatId, UUID callId) {
-        ToolCall call = require(chatId, callId);
-        if (call.getStatus() != ToolCallStatus.PENDING) {
-            throw new IllegalArgumentException("This command has already been decided");
+        ToolCall call = requireDecidable(chatId, callId);
+        Instant decidedAt = Instant.now();
+        if (toolCalls.decide(callId, chatId, ToolCallStatus.PENDING, ToolCallStatus.DENIED, decidedAt) == 0) {
+            throw new IllegalArgumentException(ALREADY_DECIDED);
         }
         call.setStatus(ToolCallStatus.DENIED);
-        call.setDecidedAt(Instant.now());
+        call.setDecidedAt(decidedAt);
         return ToolCallView.from(toolCalls.save(call), catalogue());
+    }
+
+    /**
+     * Removes the proposals made by turns that no longer exist. Rewind and regenerate delete
+     * messages, and the foreign key nulls {@code message_id} rather than deleting the row, so
+     * without this a proposal would survive its own conversation as a still-clickable card. Rows
+     * orphaned before this cleanup existed are removed too.
+     */
+    @Transactional
+    public int discard(UUID chatId, Collection<UUID> messageIds) {
+        int removed = messageIds.isEmpty() ? 0 : toolCalls.deleteForMessages(chatId, messageIds);
+        return removed + toolCalls.deleteOrphans(chatId);
     }
 
     /**
@@ -123,11 +145,28 @@ public class ToolCallService {
     @Transactional
     public void claimForContinuation(UUID chatId, UUID callId) {
         ToolCall call = require(chatId, callId);
+        requireTurn(call);
         if (call.getStatus() == ToolCallStatus.PENDING) {
             throw new IllegalArgumentException("Approve or deny the command before continuing");
         }
         if (toolCalls.claimContinuation(callId, chatId) == 0) {
             throw new IllegalArgumentException("This command result has already been used");
+        }
+    }
+
+    /** A proposal can only be decided while the turn that made it still exists. */
+    private ToolCall requireDecidable(UUID chatId, UUID callId) {
+        ToolCall call = require(chatId, callId);
+        requireTurn(call);
+        if (call.getStatus() != ToolCallStatus.PENDING) {
+            throw new IllegalArgumentException(ALREADY_DECIDED);
+        }
+        return call;
+    }
+
+    private static void requireTurn(ToolCall call) {
+        if (call.getMessage() == null) {
+            throw new IllegalArgumentException(STALE);
         }
     }
 

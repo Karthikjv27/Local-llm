@@ -144,14 +144,20 @@ public class ChatService {
             throw new IllegalArgumentException("The last message is not a reply");
         }
 
+        List<Message> dropped = new ArrayList<>();
         int index = history.size() - 1;
         while (index >= 0 && history.get(index).getRole() == MessageRole.ASSISTANT) {
-            messages.delete(history.get(index));
+            dropped.add(history.get(index));
             index--;
         }
         if (index < 0) {
             throw new IllegalArgumentException("Nothing to regenerate");
         }
+
+        // Decided before the messages go: a proposal made by the reply being replaced must not
+        // outlive it as a still-actionable card.
+        toolCalls.discard(chatId, ids(dropped));
+        dropped.forEach(messages::delete);
 
         chats.touch(chatId, Instant.now());
         return stream(chat, chat.getModel(), contextWindow(chat).prompt(), toolRunner.tools());
@@ -210,9 +216,14 @@ public class ChatService {
             throw new MessageNotFoundException("Message " + messageId + " is not part of this chat");
         }
         int fromSeq = target.getSeq();
-        messages.findByChatIdOrderBySeqAsc(chatId).stream()
+        List<Message> doomed = messages.findByChatIdOrderBySeqAsc(chatId).stream()
                 .filter(message -> message.getSeq() >= fromSeq)
-                .forEach(messages::delete);
+                .toList();
+        // The tool_calls foreign key nulls message_id on delete, so the proposals of the rewound
+        // turns are removed first; otherwise they would survive as cards for a conversation the
+        // model no longer has.
+        toolCalls.discard(chatId, ids(doomed));
+        doomed.forEach(messages::delete);
         chats.touch(chatId, Instant.now());
         return detail(chat);
     }
@@ -497,6 +508,10 @@ public class ChatService {
                 window.view(),
                 messagesView,
                 toolCalls.list(chat.getId()));
+    }
+
+    private static List<UUID> ids(List<Message> messages) {
+        return messages.stream().map(Message::getId).toList();
     }
 
     private int nextSeq(UUID chatId) {

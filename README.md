@@ -61,7 +61,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Context budget** | The prompt is trimmed to a token budget newest-first, with a meter showing what the next request will send |
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
-| **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, each proposal feeds exactly one continuation, and every proposal — approved, denied or rejected — is recorded |
+| **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, a proposal can be decided exactly once even under a double click, each outcome feeds exactly one continuation, and every proposal — approved, denied or rejected — is recorded |
 | **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
@@ -327,6 +327,10 @@ Why it looks like this:
 - **Tool proposals are their own table.** A pending approval has to survive a refresh, and a denied proposal is
   still evidence of what the model asked for. The command it produces is a normal `command_runs` row, so the
   audit trail stays in one place and deleting a chat does not erase it.
+- **A decision is won, not checked.** `approve`/`deny` move the row with `update … where status = 'PENDING'` and act
+  only when that update touched one row, so two concurrent approvals cannot both run the command. The foreign key
+  nulls `message_id` when a message is deleted, so rewind and regenerate remove the proposals of the turns they
+  drop — a card can never outlive the conversation turn that proposed it.
 
 ---
 
@@ -351,7 +355,7 @@ Why it looks like this:
 | POST | `/api/chats/{id}/fork?fromSeq=` | Copy the conversation (optionally up to a sequence number) into a new chat |
 | DELETE | `/api/chats/{id}/messages/{messageId}` | Rewind: remove this message and everything after it |
 | GET | `/api/chats/{id}/stats` | Message counts, token totals, average tok/s and latency, failures and stops |
-| POST | `/api/chats/{id}/tool-calls/{callId}/approve` | Runs a proposed command — re-validated against the allowlist |
+| POST | `/api/chats/{id}/tool-calls/{callId}/approve` | Runs a proposed command — re-validated against the allowlist; a second approve of the same proposal is `400` |
 | POST | `/api/chats/{id}/tool-calls/{callId}/deny` | Declines it; nothing is executed |
 | POST | `/api/chats/{id}/tool-calls/{callId}/continue` | Model answers using the result once — **SSE**; a second use is `400` |
 | GET | `/api/commands` | The allowlist, with timeouts and destructive flags |
@@ -467,7 +471,8 @@ cd frontend && npm run lint    # oxlint
 | `ContextBudgetTest` (5 tests) | Everything fits; oldest dropped first; a window never starts with a reply; the system prompt consumes budget; the four-chars-per-token estimate |
 | `ChatStatsTest` (4 tests) | Empty history, rate/latency averages, failed vs stopped counts, and first/last message timestamps |
 | `ActiveStreamsTest` (4 tests) | A registered stream can be stopped, an idle stop is a no-op, closing unregisters, and an old close cannot remove a newer registration |
-| `ToolCallServiceTest` (8 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final; an undecided proposal cannot continue, and a decided one only once |
+| `ToolCallServiceTest` (13 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final; a raced second approve runs nothing; a proposal whose turn was rewound never runs; invalid arguments fail without a run; discard removes proposals and old orphans; an undecided proposal cannot continue, and a decided one only once |
+| `ChatServiceTest` (3 tests) | Rewind and regenerate delete the proposals of the turns they remove (before the messages, so nothing is orphaned), and regenerating with nothing to replace changes nothing |
 | `CatalogToolRunnerTest` (6 tests) | The tool schema's enum is exactly the allowlist, destructive and argument-taking commands are described, and running rejects an unknown id or a flag-shaped argument |
 | `OllamaChatClientTest` (4 tests) | Tool calls parse whether Ollama sends arguments as an object or a JSON string; plain and counter-only frames still parse |
 | `ArchitectureTest` (6 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
