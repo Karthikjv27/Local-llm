@@ -2,9 +2,10 @@ import { useState } from 'react'
 import type { MetricsResponse, ModelView } from '../api/types'
 import type { MetricsHistory } from '../hooks/useMetrics'
 import { ActionsPanel } from './ActionsPanel'
+import { DocsPanel } from './DocsPanel'
 import { MetricsPanel } from './MetricsPanel'
 
-type Tab = 'metrics' | 'actions'
+type Tab = 'metrics' | 'actions' | 'docs'
 
 interface RightRailProps {
   metrics: MetricsResponse | null
@@ -20,7 +21,7 @@ export function RightRail({ metrics, history, models, chatId, onClose }: RightRa
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l border-zinc-800">
       <div className="flex items-center gap-1 border-b border-zinc-800 px-3 py-2">
-        {(['metrics', 'actions'] as const).map((value) => (
+        {(['metrics', 'actions', 'docs'] as const).map((value) => (
           <button
             key={value}
             type="button"
@@ -45,8 +46,10 @@ export function RightRail({ metrics, history, models, chatId, onClose }: RightRa
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {tab === 'metrics' ? (
           <MetricsPanel metrics={metrics} history={history} />
-        ) : (
+        ) : tab === 'actions' ? (
           <ActionsPanel models={models} chatId={chatId} />
+        ) : (
+          <DocsPanel />
         )}
       </div>
     </aside>

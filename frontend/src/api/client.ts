@@ -7,6 +7,8 @@ import type {
   CommandRunView,
   MetricsResponse,
   ModelView,
+  RagDocumentView,
+  RagIndexResult,
   StreamEvent,
   ToolCallView,
 } from './types'
@@ -95,6 +97,23 @@ export const api = {
     fetch(`/api/chats/${chatId}/tool-calls/${callId}/deny`, { method: 'POST' }).then(
       readJson<ToolCallView>,
     ),
+
+  ragDocuments: () => fetch('/api/rag/documents').then(readJson<RagDocumentView[]>),
+
+  /** Indexes a folder. Unchanged files are skipped server-side, so re-running is cheap. */
+  indexFolder: (path: string) =>
+    fetch('/api/rag/index', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ path }),
+    }).then(readJson<RagIndexResult>),
+
+  deleteDocument: async (id: string) => {
+    const response = await fetch(`/api/rag/documents/${id}`, { method: 'DELETE' })
+    if (!response.ok) {
+      throw new Error(`Could not remove the document (${response.status})`)
+    }
+  },
 }
 
 /**

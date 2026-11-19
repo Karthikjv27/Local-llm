@@ -3,6 +3,7 @@ package com.localllm.locie.chat;
 import com.localllm.locie.common.ChatNotFoundException;
 import com.localllm.locie.common.MessageNotFoundException;
 import com.localllm.locie.model.LlmProvider;
+import com.localllm.locie.rag.RagService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -39,11 +40,13 @@ public class ChatService {
     private final ActiveStreams activeStreams;
     private final ToolRunner toolRunner;
     private final ToolCallService toolCalls;
+    private final RagService rag;
     private final int contextTokens;
     private final int historyLimit;
 
     public ChatService(ChatRepository chats, MessageRepository messages, LlmProvider llm,
                        ActiveStreams activeStreams, ToolRunner toolRunner, ToolCallService toolCalls,
+                       RagService rag,
                        @Value("${locie.chat.context-tokens:4096}") int contextTokens,
                        @Value("${locie.chat.history-limit:40}") int historyLimit) {
         this.chats = chats;
@@ -52,6 +55,7 @@ public class ChatService {
         this.activeStreams = activeStreams;
         this.toolRunner = toolRunner;
         this.toolCalls = toolCalls;
+        this.rag = rag;
         this.contextTokens = contextTokens;
         this.historyLimit = historyLimit;
     }
@@ -130,7 +134,7 @@ public class ChatService {
             chats.save(chat);
         }
 
-        return stream(chat, model, contextWindow(chat).prompt(), toolRunner.tools());
+        return stream(chat, model, withRetrieval(contextWindow(chat).prompt(), content), toolRunner.tools());
     }
 
     /**
@@ -160,7 +164,10 @@ public class ChatService {
         dropped.forEach(messages::delete);
 
         chats.touch(chatId, Instant.now());
-        return stream(chat, chat.getModel(), contextWindow(chat).prompt(), toolRunner.tools());
+        // The remaining message is the prompt being regenerated; retrieval uses it as the query.
+        String question = history.get(index).getContent();
+        return stream(chat, chat.getModel(), withRetrieval(contextWindow(chat).prompt(), question),
+                toolRunner.tools());
     }
 
     /** Signals the reply currently streaming in this chat to stop; false when nothing is running. */
@@ -478,6 +485,22 @@ public class ChatService {
 
     private static ServerSentEvent<ChatStreamEvent> sse(String event, ChatStreamEvent data) {
         return ServerSentEvent.<ChatStreamEvent>builder().event(event).data(data).build();
+    }
+
+    /**
+     * Puts the passages closest to the question in front of the conversation, directly after the
+     * chat's own system prompt so the user's instructions keep priority. Nothing indexed, nothing
+     * relevant, or an embedding model that is down all leave the prompt exactly as it was.
+     */
+    List<Map<String, Object>> withRetrieval(List<Map<String, Object>> prompt, String question) {
+        return rag.contextFor(question)
+                .map(context -> {
+                    List<Map<String, Object>> enriched = new ArrayList<>(prompt);
+                    int at = !enriched.isEmpty() && "system".equals(enriched.getFirst().get("role")) ? 1 : 0;
+                    enriched.add(at, Map.of("role", "system", "content", context));
+                    return enriched;
+                })
+                .orElse(prompt);
     }
 
     private ContextBudget.Window contextWindow(Chat chat) {

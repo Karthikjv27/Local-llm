@@ -1,5 +1,6 @@
 package com.localllm.locie.chat;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
@@ -9,7 +10,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.localllm.locie.model.LlmProvider;
+import com.localllm.locie.rag.RagService;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,8 +29,9 @@ class ChatServiceTest {
     private final ActiveStreams activeStreams = mock(ActiveStreams.class);
     private final ToolRunner toolRunner = mock(ToolRunner.class);
     private final ToolCallService toolCalls = mock(ToolCallService.class);
+    private final RagService rag = mock(RagService.class);
     private final ChatService service = new ChatService(
-            chats, messages, llm, activeStreams, toolRunner, toolCalls, 4096, 40);
+            chats, messages, llm, activeStreams, toolRunner, toolCalls, rag, 4096, 40);
 
     private final Chat chat = new Chat();
 
@@ -84,6 +88,31 @@ class ChatServiceTest {
                 .hasMessageContaining("Nothing to regenerate");
         verify(toolCalls, never()).discard(any(), any());
         verify(messages, never()).delete(any());
+    }
+
+    @Test
+    void retrievedContextIsInsertedAfterTheSystemPrompt() {
+        List<Map<String, Object>> prompt = List.of(
+                Map.of("role", "system", "content", "be brief"),
+                Map.of("role", "user", "content", "where is the config?"));
+        when(rag.contextFor("where is the config?")).thenReturn(Optional.of("CONTEXT"));
+
+        List<Map<String, Object>> enriched = service.withRetrieval(prompt, "where is the config?");
+
+        assertThat(enriched).hasSize(3);
+        assertThat(enriched.get(0).get("content")).isEqualTo("be brief");
+        assertThat(enriched.get(1).get("content")).isEqualTo("CONTEXT");
+        assertThat(enriched.get(2).get("content")).isEqualTo("where is the config?");
+        // The caller's list is copied, not mutated.
+        assertThat(prompt).hasSize(2);
+    }
+
+    @Test
+    void withoutRetrievalThePromptIsLeftExactlyAsItWas() {
+        List<Map<String, Object>> prompt = List.of(Map.of("role", "user", "content", "hi"));
+        when(rag.contextFor("hi")).thenReturn(Optional.empty());
+
+        assertThat(service.withRetrieval(prompt, "hi")).isSameAs(prompt);
     }
 
     private Message message(int seq, MessageRole role) {

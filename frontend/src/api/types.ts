@@ -94,6 +94,34 @@ export interface ChatStats {
   lastMessageAt: string | null
 }
 
+/** One indexed file from the local folder index. */
+export interface RagDocumentView {
+  id: string
+  path: string
+  title: string
+  sizeBytes: number
+  chunks: number
+  indexedAt: string
+}
+
+export interface RagIndexResult {
+  added: number
+  updated: number
+  skipped: number
+  chunks: number
+  durationMs: number
+  documents: RagDocumentView[]
+}
+
+/** A retrieved passage, with the document it came from and its cosine score. */
+export interface RagSnippet {
+  documentId: string
+  path: string
+  ordinal: number
+  score: number
+  content: string
+}
+
 export type StreamEvent =
   | { type: 'token'; text: string }
   | { type: 'tool'; tool: ToolCallView }

@@ -62,6 +62,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
 | **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, a proposal can be decided exactly once even under a double click, each outcome feeds exactly one continuation, and every proposal — approved, denied or rejected — is recorded |
+| **Local RAG** | Index a folder of notes/code: files are chunked, embedded with Ollama, stored in PostgreSQL, and the closest passages to each question are added to the prompt with their source paths — unchanged files are skipped on re-index |
 | **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
@@ -93,6 +94,7 @@ com.localllm.locie
 ├── model/     Ollama clients (admin + native chat stream), catalog views
 ├── system/    metrics, health, command runner, GPU probes
 ├── command/   command allowlist, run history, streamed execution
+├── rag/       folder indexing, embeddings, cosine retrieval, prompt context
 └── common/    typed exceptions, RFC 9457 error handling
 ```
 
@@ -301,6 +303,13 @@ command_runs(id uuid pk, chat_id uuid → chats on delete set null,
              exit_code int, stdout text, stderr text,
              started_at timestamptz, finished_at timestamptz, duration_ms int)
 
+rag_documents(id uuid pk, path text unique, title text, content_hash text,
+              size_bytes bigint, chunk_count int, indexed_at timestamptz)
+
+rag_chunks(id uuid pk, document_id uuid → rag_documents on delete cascade,
+           ordinal int, content text, embedding text,
+           unique (document_id, ordinal))
+
 tool_calls(id uuid pk, chat_id uuid → chats on delete cascade,
            message_id uuid → messages on delete set null,
            command_id text, args text,
@@ -362,6 +371,10 @@ Why it looks like this:
 | POST | `/api/commands/run` | Run a command to completion, return the saved run |
 | POST | `/api/commands/run/stream` | Run a command — **SSE**: `line`*, `done` |
 | GET | `/api/commands/history` | 50 most recent runs |
+| GET | `/api/rag/documents` | Indexed files with chunk counts |
+| POST | `/api/rag/index` | Index a folder (`{"path": "D:\\notes"}`); unchanged files are skipped |
+| DELETE | `/api/rag/documents/{id}` | Remove one file and its chunks from the index |
+| GET | `/api/rag/search?q=&limit=` | The passages a question would retrieve, with scores |
 
 Errors are RFC 9457 `application/problem+json` (`status`, `title`, `detail`, `instance`), produced by
 `ApiExceptionHandler` from typed exceptions:
@@ -450,6 +463,18 @@ puts the seam where a second provider (a hosted API, another local runtime) will
 new adapter. ArchUnit enforces it: `ChatService` may not import an `Ollama*` class, and nothing outside `model`
 may touch the transport clients.
 
+**Why is retrieval a prompt prefix rather than a second model call?** The question is embedded
+once, the chunks are ranked by cosine, and the winners become one extra system message. That keeps
+one generation request per turn, makes the retrieved sources visible in the code path, and means a
+missing embedding model degrades to a normal chat instead of an error. The cost is that the chat
+model cannot ask for a second, better-targeted search — that needs a tool loop, not a prefix.
+
+**Why is the embedding stored as text and ranked in Java?** The `vector` extension is not
+installed on every machine this runs on, and a `CREATE EXTENSION` that fails would stop the app from
+booting. A personal index is small (a folder of notes), so an exact scan is fast and the ranking is
+readable and testable. The column stays a text list of floats, so moving to `vector` + an HNSW
+index later is a migration, not a redesign.
+
 **Trade-offs accepted:** no pagination yet (fine for personal history, not for thousands of chats); the frontend
 has no state library (fine at this size, would need one if the UI grew another axis); no authentication (local
 tool); GPU utilisation on Windows is the busiest engine, not an average.
@@ -472,6 +497,8 @@ cd frontend && npm run lint    # oxlint
 | `ChatStatsTest` (4 tests) | Empty history, rate/latency averages, failed vs stopped counts, and first/last message timestamps |
 | `ActiveStreamsTest` (4 tests) | A registered stream can be stopped, an idle stop is a no-op, closing unregisters, and an old close cannot remove a newer registration |
 | `ToolCallServiceTest` (13 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final; a raced second approve runs nothing; a proposal whose turn was rewound never runs; invalid arguments fail without a run; discard removes proposals and old orphans; an undecided proposal cannot continue, and a decided one only once |
+| `RagChunkerTest` (6 tests) | Blank text produces nothing, short text stays whole, windows never exceed the size, a paragraph boundary is preferred, consecutive chunks overlap, and an overlap larger than the window still terminates |
+| `RagServiceTest` (8 tests) | Indexing writes the document and its chunks while skipping ignored folders and binary files, an unchanged hash skips the embedder, search ranks by cosine and caps chunks per document, low scores are dropped, the context block carries the source path, a failed embedding leaves the chat without retrieval, a missing folder is rejected, and deleting removes the chunks |
 | `ChatServiceTest` (3 tests) | Rewind and regenerate delete the proposals of the turns they remove (before the messages, so nothing is orphaned), and regenerating with nothing to replace changes nothing |
 | `CatalogToolRunnerTest` (6 tests) | The tool schema's enum is exactly the allowlist, destructive and argument-taking commands are described, and running rejects an unknown id or a flag-shaped argument |
 | `OllamaChatClientTest` (4 tests) | Tool calls parse whether Ollama sends arguments as an object or a JSON string; plain and counter-only frames still parse |
@@ -494,6 +521,8 @@ the highest-value next tests.
 ### Prerequisites
 
 - Java 25+, Node 20+, PostgreSQL, Ollama with at least one model (`ollama pull qwen2.5-coder:3b`)
+- For retrieval: an embedding model (`ollama pull nomic-embed-text`, ~274 MB); without it indexing
+  returns a 404 telling you to pull it, and chat keeps working without retrieval
 
 ### Database
 
@@ -570,6 +599,9 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 - No authentication, binds all interfaces.
 - No pagination for chats, messages or command history; command output is stored up to 256 KB per run.
 - Search is substring matching, so it does not stem or rank results.
+- RAG ranks chunks independently: there is no reranker, no query rewriting, and no citation UI — the
+  sources are named inside the prompt the model receives, and retrieval runs on every message once
+  something is indexed (there is no per-chat toggle yet).
 - Tool calling depends on the model's chat template. `qwen2.5-coder:3b` (the only tools-capable model installed here)
   narrates the call as text instead of emitting `tool_calls`, so the loop was verified against a stub that returns
   Ollama's real wire shape. A model with working tool templates (`llama3.1`, `qwen2.5` 7B+) is needed for the model
@@ -584,7 +616,8 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 3. Real tokenizer-aware context accounting, so the budget matches the model instead of a character estimate.
 4. Model comparison view using the tok/s already recorded per message.
 5. Image input — `llava` is already installed.
-6. Local RAG over a folder with pgvector and `nomic-embed-text`.
+6. Per-chat retrieval toggle plus citations rendered under each reply, and pgvector + HNSW once the
+   extension is present.
 
 ---
 
@@ -601,6 +634,7 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 │   ├── system/                      SystemMetricsService, HealthController, MetricsController,
 │   │   └── gpu/                     CommandRunner, GpuProbe, GpuService, NvidiaSmiGpuProbe, WindowsGpuProbe
 │   ├── command/                     CommandCatalog, CommandService, CommandRunner glue, stream events
+│   ├── rag/                         RagService, RagChunker, OllamaEmbedder, /api/rag endpoints
 │   └── common/                      typed exceptions, ApiExceptionHandler
 ├── src/main/resources/
 │   ├── application.properties

@@ -1,0 +1,13 @@
+package com.localllm.locie.rag;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface RagDocumentRepository extends JpaRepository<RagDocument, UUID> {
+
+    Optional<RagDocument> findByPath(String path);
+
+    List<RagDocument> findAllByOrderByPathAsc();
+}
