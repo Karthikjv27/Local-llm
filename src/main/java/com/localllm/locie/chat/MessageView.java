@@ -2,6 +2,7 @@ package com.localllm.locie.chat;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record MessageView(
@@ -15,6 +16,7 @@ public record MessageView(
         BigDecimal tokensPerSec,
         String error,
         boolean cancelled,
+        List<MessageSource> sources,
         Instant createdAt) {
 
     static MessageView from(Message message) {
@@ -29,6 +31,7 @@ public record MessageView(
                 message.getTokensPerSec(),
                 message.getError(),
                 message.isCancelled(),
+                message.getSources(),
                 message.getCreatedAt());
     }
 }

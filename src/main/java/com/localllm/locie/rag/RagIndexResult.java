@@ -7,6 +7,7 @@ public record RagIndexResult(
         int added,
         int updated,
         int skipped,
+        int removed,
         int chunks,
         long durationMs,
         List<RagDocumentView> documents) {

@@ -180,6 +180,7 @@ export default function App() {
                   tokensPerSec: null,
                   error: null,
                   cancelled: false,
+                  sources: null,
                   createdAt: new Date().toISOString(),
                 },
               ],

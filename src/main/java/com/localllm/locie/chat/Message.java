@@ -1,6 +1,7 @@
 package com.localllm.locie.chat;
 
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -13,6 +14,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.Setter;
@@ -63,6 +65,11 @@ public class Message {
     /** True when the user pressed Stop; the content holds what had been generated so far. */
     @Column(nullable = false)
     private boolean cancelled = false;
+
+    /** The indexed files this reply was shown; empty when it used no retrieval. */
+    @Convert(converter = MessageSourceListConverter.class)
+    @Column(columnDefinition = "text")
+    private List<MessageSource> sources = List.of();
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

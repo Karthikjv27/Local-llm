@@ -111,7 +111,9 @@ class RagServiceTest {
                 chunk(document("a.md", "a.md", ""), 0, "alpha one", new float[]{1, 0})));
 
         assertThat(service.contextFor("where is alpha?")).hasValueSatisfying(context -> {
-            assertThat(context).contains("[1] a.md").contains("alpha one");
+            assertThat(context.text()).contains("[1] a.md").contains("alpha one");
+            assertThat(context.snippets()).hasSize(1);
+            assertThat(context.snippets().getFirst().path()).isEqualTo("a.md");
         });
     }
 
@@ -129,6 +131,32 @@ class RagServiceTest {
         assertThatThrownBy(() -> service.index(folder.resolve("missing").toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Folder not found");
+    }
+
+    @Test
+    void reindexingDropsDocumentsWhoseFilesAreGone() throws IOException {
+        Files.writeString(folder.resolve("kept.md"), "alpha note");
+        String gone = folder.resolve("deleted.md").toAbsolutePath().normalize().toString();
+        RagDocument stale = document(gone, "deleted.md", "alpha note");
+        when(documents.findAll()).thenReturn(List.of(stale));
+
+        RagIndexResult result = service.index(folder.toString());
+
+        assertThat(result.removed()).isEqualTo(1);
+        verify(chunks).deleteByDocumentId(stale.getId());
+        verify(documents).delete(stale);
+    }
+
+    @Test
+    void reindexingLeavesDocumentsOutsideTheFolderAlone() throws IOException {
+        Files.writeString(folder.resolve("kept.md"), "alpha note");
+        RagDocument elsewhere = document(
+                folder.resolveSibling("other/notes.md").toAbsolutePath().normalize().toString(),
+                "notes.md", "alpha note");
+        when(documents.findAll()).thenReturn(List.of(elsewhere));
+
+        assertThat(service.index(folder.toString()).removed()).isZero();
+        verify(documents, never()).delete(elsewhere);
     }
 
     @Test

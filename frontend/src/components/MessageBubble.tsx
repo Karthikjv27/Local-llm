@@ -1,4 +1,4 @@
-import type { MessageView } from '../api/types'
+import type { MessageSource, MessageView } from '../api/types'
 import { duration } from '../lib/format'
 import { MarkdownText } from './MarkdownText'
 
@@ -8,6 +8,22 @@ interface MessageBubbleProps {
   onRegenerate?: () => void
   /** Deletes this message and everything after it. */
   onTruncate?: () => void
+}
+
+function sourceName(path: string) {
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] || path
+}
+
+function citedFiles(sources: MessageSource[]) {
+  const best = new Map<string, MessageSource>()
+  for (const source of sources) {
+    const current = best.get(source.path)
+    if (!current || source.score > current.score) {
+      best.set(source.path, source)
+    }
+  }
+  return [...best.values()].sort((a, b) => b.score - a.score)
 }
 
 export function MessageBubble({ message, canRegenerate = false, onRegenerate, onTruncate }: MessageBubbleProps) {
@@ -21,6 +37,9 @@ export function MessageBubble({ message, canRegenerate = false, onRegenerate, on
   const hasMetrics =
     !isUser &&
     (message.completionTokens != null || message.tokensPerSec != null || message.latencyMs != null)
+
+  // A document can contribute two chunks; the reply cites the file once, at its best score.
+  const sources = isUser || !message.sources ? [] : citedFiles(message.sources)
 
   return (
     <div className={`group flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
@@ -50,6 +69,21 @@ export function MessageBubble({ message, canRegenerate = false, onRegenerate, on
               .filter(Boolean)
               .join(' · ')}
           </p>
+        )}
+
+        {sources.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-zinc-800 pt-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-zinc-600">Sources</span>
+            {sources.map((source) => (
+              <span
+                key={source.path}
+                title={`${source.path} · chunk ${source.ordinal + 1} · score ${source.score.toFixed(3)}`}
+                className="max-w-[14rem] truncate rounded bg-zinc-800/70 px-1.5 py-0.5 text-[10px] text-zinc-400"
+              >
+                {sourceName(source.path)}
+              </span>
+            ))}
+          </div>
         )}
       </div>
 

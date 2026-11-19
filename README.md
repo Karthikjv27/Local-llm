@@ -62,7 +62,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
 | **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, a proposal can be decided exactly once even under a double click, each outcome feeds exactly one continuation, and every proposal — approved, denied or rejected — is recorded |
-| **Local RAG** | Index a folder of notes/code: files are chunked, embedded with Ollama, stored in PostgreSQL, and the closest passages to each question are added to the prompt with their source paths — unchanged files are skipped on re-index |
+| **Local RAG** | Index a folder of notes/code: files are chunked, embedded with Ollama, stored in PostgreSQL, and the closest passages to each question are added to the prompt — unchanged files are skipped on re-index, files deleted or renamed on disk are dropped from the index, and every reply lists the files it drew on |
 | **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
@@ -293,8 +293,9 @@ messages(id uuid pk, chat_id uuid → chats on delete cascade,
          seq int, role text check in (USER, ASSISTANT, SYSTEM),
          content text, model text,
          prompt_tokens int, completion_tokens int,
-         latency_ms int, tokens_per_sec numeric(8,2), error text, cancelled bool,
-         created_at timestamptz,
+                   latency_ms int, tokens_per_sec numeric(8,2), error text, cancelled bool,
+          sources text, -- one "ordinal TAB score TAB path" line per cited file
+          created_at timestamptz,
          unique (chat_id, seq))
 
 command_runs(id uuid pk, chat_id uuid → chats on delete set null,
@@ -372,7 +373,7 @@ Why it looks like this:
 | POST | `/api/commands/run/stream` | Run a command — **SSE**: `line`*, `done` |
 | GET | `/api/commands/history` | 50 most recent runs |
 | GET | `/api/rag/documents` | Indexed files with chunk counts |
-| POST | `/api/rag/index` | Index a folder (`{"path": "D:\\notes"}`); unchanged files are skipped |
+| POST | `/api/rag/index` | Index a folder (`{"path": "D:\\notes"}`); unchanged files are skipped and deleted/renamed ones are removed |
 | DELETE | `/api/rag/documents/{id}` | Remove one file and its chunks from the index |
 | GET | `/api/rag/search?q=&limit=` | The passages a question would retrieve, with scores |
 
@@ -469,6 +470,10 @@ one generation request per turn, makes the retrieved sources visible in the code
 missing embedding model degrades to a normal chat instead of an error. The cost is that the chat
 model cannot ask for a second, better-targeted search — that needs a tool loop, not a prefix.
 
+The files a reply was shown are stored on the reply itself (not looked up afterwards), so the
+citations under a message are what that turn actually saw, even after the file is edited, re-indexed
+or deleted.
+
 **Why is the embedding stored as text and ranked in Java?** The `vector` extension is not
 installed on every machine this runs on, and a `CREATE EXTENSION` that fails would stop the app from
 booting. A personal index is small (a folder of notes), so an exact scan is fast and the ranking is
@@ -498,8 +503,8 @@ cd frontend && npm run lint    # oxlint
 | `ActiveStreamsTest` (4 tests) | A registered stream can be stopped, an idle stop is a no-op, closing unregisters, and an old close cannot remove a newer registration |
 | `ToolCallServiceTest` (13 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final; a raced second approve runs nothing; a proposal whose turn was rewound never runs; invalid arguments fail without a run; discard removes proposals and old orphans; an undecided proposal cannot continue, and a decided one only once |
 | `RagChunkerTest` (6 tests) | Blank text produces nothing, short text stays whole, windows never exceed the size, a paragraph boundary is preferred, consecutive chunks overlap, and an overlap larger than the window still terminates |
-| `RagServiceTest` (8 tests) | Indexing writes the document and its chunks while skipping ignored folders and binary files, an unchanged hash skips the embedder, search ranks by cosine and caps chunks per document, low scores are dropped, the context block carries the source path, a failed embedding leaves the chat without retrieval, a missing folder is rejected, and deleting removes the chunks |
-| `ChatServiceTest` (3 tests) | Rewind and regenerate delete the proposals of the turns they remove (before the messages, so nothing is orphaned), and regenerating with nothing to replace changes nothing |
+| `RagServiceTest` (10 tests) | Indexing writes the document and its chunks while skipping ignored folders and binary files, an unchanged hash skips the embedder, re-indexing drops files that are gone from disk but leaves other folders alone, search ranks by cosine and caps chunks per document, low scores are dropped, the context block carries the source path, a failed embedding leaves the chat without retrieval, a missing folder is rejected, and deleting removes the chunks |
+| `ChatServiceTest` (5 tests) | Rewind and regenerate delete the proposals of the turns they remove (before the messages, so nothing is orphaned), regenerating with nothing to replace changes nothing, and retrieval is inserted after the system prompt with its passages carried for the reply's citations |
 | `CatalogToolRunnerTest` (6 tests) | The tool schema's enum is exactly the allowlist, destructive and argument-taking commands are described, and running rejects an unknown id or a flag-shaped argument |
 | `OllamaChatClientTest` (4 tests) | Tool calls parse whether Ollama sends arguments as an object or a JSON string; plain and counter-only frames still parse |
 | `ArchitectureTest` (6 rules) | Controllers never touch repositories, feature modules stay cycle-free, `model` doesn't reach upward, domain helpers stay framework-free, and `ChatService` depends on `LlmProvider` rather than the Ollama classes |
@@ -599,9 +604,12 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 - No authentication, binds all interfaces.
 - No pagination for chats, messages or command history; command output is stored up to 256 KB per run.
 - Search is substring matching, so it does not stem or rank results.
-- RAG ranks chunks independently: there is no reranker, no query rewriting, and no citation UI — the
-  sources are named inside the prompt the model receives, and retrieval runs on every message once
-  something is indexed (there is no per-chat toggle yet).
+- RAG ranks chunks independently: there is no reranker and no query rewriting. The reply's sources
+  come from retrieval, not from what the model chose to mention, so a reply can cite a file it did not
+  actually use. Retrieval runs on every message once something is indexed (there is no per-chat toggle
+  yet).
+- Pruning only runs from the folder being re-indexed: deleting a folder from disk leaves its documents
+  indexed until they are removed per file or the index is cleared.
 - Tool calling depends on the model's chat template. `qwen2.5-coder:3b` (the only tools-capable model installed here)
   narrates the call as text instead of emitting `tool_calls`, so the loop was verified against a stub that returns
   Ollama's real wire shape. A model with working tool templates (`llama3.1`, `qwen2.5` 7B+) is needed for the model
@@ -616,8 +624,7 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 3. Real tokenizer-aware context accounting, so the budget matches the model instead of a character estimate.
 4. Model comparison view using the tok/s already recorded per message.
 5. Image input — `llava` is already installed.
-6. Per-chat retrieval toggle plus citations rendered under each reply, and pgvector + HNSW once the
-   extension is present.
+6. Per-chat retrieval toggle, and pgvector + HNSW once the extension is present.
 
 ---
 

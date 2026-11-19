@@ -33,7 +33,16 @@ export interface MessageView {
   tokensPerSec: number | null
   error: string | null
   cancelled: boolean
+  /** Indexed files the reply was shown; empty for a reply that used no retrieval. */
+  sources: MessageSource[] | null
   createdAt: string
+}
+
+/** One indexed file a reply drew on, with the chunk and its cosine score. */
+export interface MessageSource {
+  path: string
+  ordinal: number
+  score: number
 }
 
 export interface ContextView {
@@ -108,6 +117,8 @@ export interface RagIndexResult {
   added: number
   updated: number
   skipped: number
+  /** Files that were indexed before and are gone from disk (deleted or renamed). */
+  removed: number
   chunks: number
   durationMs: number
   documents: RagDocumentView[]

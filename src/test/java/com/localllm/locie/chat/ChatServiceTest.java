@@ -10,7 +10,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.localllm.locie.model.LlmProvider;
+import com.localllm.locie.rag.RagContext;
 import com.localllm.locie.rag.RagService;
+import com.localllm.locie.rag.RagSnippet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -95,14 +97,19 @@ class ChatServiceTest {
         List<Map<String, Object>> prompt = List.of(
                 Map.of("role", "system", "content", "be brief"),
                 Map.of("role", "user", "content", "where is the config?"));
-        when(rag.contextFor("where is the config?")).thenReturn(Optional.of("CONTEXT"));
+        RagSnippet snippet = new RagSnippet(UUID.randomUUID(), "a.md", 2, 0.912, "alpha");
+        when(rag.contextFor("where is the config?"))
+                .thenReturn(Optional.of(new RagContext("CONTEXT", List.of(snippet))));
 
-        List<Map<String, Object>> enriched = service.withRetrieval(prompt, "where is the config?");
+        ChatService.Retrieval retrieval = service.withRetrieval(prompt, "where is the config?");
+        List<Map<String, Object>> enriched = retrieval.prompt();
 
         assertThat(enriched).hasSize(3);
         assertThat(enriched.get(0).get("content")).isEqualTo("be brief");
         assertThat(enriched.get(1).get("content")).isEqualTo("CONTEXT");
         assertThat(enriched.get(2).get("content")).isEqualTo("where is the config?");
+        // The passages travel with the prompt, so the reply can cite them.
+        assertThat(retrieval.sources()).containsExactly(new MessageSource("a.md", 2, 0.912));
         // The caller's list is copied, not mutated.
         assertThat(prompt).hasSize(2);
     }
@@ -112,7 +119,9 @@ class ChatServiceTest {
         List<Map<String, Object>> prompt = List.of(Map.of("role", "user", "content", "hi"));
         when(rag.contextFor("hi")).thenReturn(Optional.empty());
 
-        assertThat(service.withRetrieval(prompt, "hi")).isSameAs(prompt);
+        ChatService.Retrieval retrieval = service.withRetrieval(prompt, "hi");
+        assertThat(retrieval.prompt()).isSameAs(prompt);
+        assertThat(retrieval.sources()).isEmpty();
     }
 
     private Message message(int seq, MessageRole role) {

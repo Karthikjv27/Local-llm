@@ -38,7 +38,7 @@ export function DocsPanel() {
       setDocuments(result.documents)
       setSummary(
         `${result.added} added · ${result.updated} updated · ${result.skipped} unchanged · ` +
-          `${result.chunks} chunks · ${(result.durationMs / 1000).toFixed(1)}s`,
+          `${result.removed} removed · ${result.chunks} chunks · ${(result.durationMs / 1000).toFixed(1)}s`,
       )
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Indexing failed')
@@ -88,7 +88,8 @@ export function DocsPanel() {
         </button>
         <p className="mt-2 text-[10px] leading-snug text-zinc-600">
           Text and code files are chunked, embedded with the configured model, and stored in Postgres.
-          Unchanged files are skipped, so re-index after editing.
+          Re-index after editing: unchanged files are skipped, and files deleted or renamed on disk
+          are dropped from the index.
         </p>
         {summary && <p className="mt-2 text-[10px] text-emerald-400">{summary}</p>}
         {error && <p className="mt-2 text-[10px] leading-snug text-red-400">{error}</p>}

@@ -80,6 +80,10 @@ public class RagService {
     /**
      * Indexes every supported file under {@code folder}. A file whose content hash is unchanged is
      * skipped without calling the embedding model again, which makes re-indexing a folder cheap.
+     *
+     * <p>Anything indexed earlier from this folder that is no longer on disk is dropped in the same
+     * run, so deleting or renaming a note can never leave retrieval citing a path that is gone.
+     * Only paths inside {@code folder} are touched; other indexed folders are left alone.
      */
     @Transactional
     public RagIndexResult index(String folder) {
@@ -100,10 +104,15 @@ public class RagService {
         int added = 0;
         int updated = 0;
         int skipped = 0;
+        int removed = 0;
         int written = 0;
 
-        for (Path file : filesIn(root)) {
+        List<Path> files = filesIn(root);
+        Set<String> present = new HashSet<>(files.size() * 2);
+
+        for (Path file : files) {
             String path = file.toString();
+            present.add(path);
             String content;
             try {
                 content = read(file);
@@ -163,10 +172,28 @@ public class RagService {
             written += pieces.size();
         }
 
+        for (RagDocument indexed : documents.findAll()) {
+            if (present.contains(indexed.getPath()) || !under(root, indexed.getPath())) {
+                continue;
+            }
+            chunks.deleteByDocumentId(indexed.getId());
+            documents.delete(indexed);
+            removed++;
+        }
+
         long elapsedMs = (System.nanoTime() - started) / 1_000_000;
-        log.info("indexed {}: {} added, {} updated, {} skipped, {} chunks in {} ms",
-                root, added, updated, skipped, written, elapsedMs);
-        return new RagIndexResult(added, updated, skipped, written, elapsedMs, list());
+        log.info("indexed {}: {} added, {} updated, {} skipped, {} removed, {} chunks in {} ms",
+                root, added, updated, skipped, removed, written, elapsedMs);
+        return new RagIndexResult(added, updated, skipped, removed, written, elapsedMs, list());
+    }
+
+    /** Whether an indexed path belongs to the folder being re-indexed. */
+    private static boolean under(Path root, String path) {
+        try {
+            return Path.of(path).toAbsolutePath().normalize().startsWith(root);
+        } catch (InvalidPathException ex) {
+            return false;
+        }
     }
 
     @Transactional(readOnly = true)
@@ -237,7 +264,7 @@ public class RagService {
      * a chat to a plain chat, not break it.
      */
     @Transactional(readOnly = true)
-    public Optional<String> contextFor(String question) {
+    public Optional<RagContext> contextFor(String question) {
         try {
             List<RagSnippet> snippets = search(question, topK);
             if (snippets.isEmpty()) {
@@ -253,7 +280,7 @@ public class RagService {
                 block.append('\n').append('[').append(i + 1).append("] ").append(snippet.path()).append('\n')
                         .append(limit(snippet.content())).append('\n');
             }
-            return Optional.of(block.toString());
+            return Optional.of(new RagContext(block.toString(), snippets));
         } catch (RuntimeException ex) {
             log.warn("retrieval skipped: {}", ex.toString());
             return Optional.empty();

@@ -134,7 +134,8 @@ public class ChatService {
             chats.save(chat);
         }
 
-        return stream(chat, model, withRetrieval(contextWindow(chat).prompt(), content), toolRunner.tools());
+        Retrieval retrieval = withRetrieval(contextWindow(chat).prompt(), content);
+        return stream(chat, model, retrieval.prompt(), retrieval.sources(), toolRunner.tools());
     }
 
     /**
@@ -166,8 +167,8 @@ public class ChatService {
         chats.touch(chatId, Instant.now());
         // The remaining message is the prompt being regenerated; retrieval uses it as the query.
         String question = history.get(index).getContent();
-        return stream(chat, chat.getModel(), withRetrieval(contextWindow(chat).prompt(), question),
-                toolRunner.tools());
+        Retrieval retrieval = withRetrieval(contextWindow(chat).prompt(), question);
+        return stream(chat, chat.getModel(), retrieval.prompt(), retrieval.sources(), toolRunner.tools());
     }
 
     /** Signals the reply currently streaming in this chat to stop; false when nothing is running. */
@@ -257,8 +258,9 @@ public class ChatService {
         prompt.add(toolRequestMessage(call));
         prompt.add(toolResultMessage(call));
         // No tools on the continuation: one approval covers one command, so the model answers
-        // instead of proposing another round.
-        return stream(chat, chat.getModel(), prompt, List.of());
+        // instead of proposing another round. The passages were already in the prompt this
+        // conversation started from, so the continuation cites nothing new.
+        return stream(chat, chat.getModel(), prompt, List.of(), List.of());
     }
 
     private static Map<String, Object> toolRequestMessage(ToolCall call) {
@@ -348,6 +350,7 @@ public class ChatService {
     /** Streams a reply for an already-built prompt and persists the result. */
     private Flux<ServerSentEvent<ChatStreamEvent>> stream(Chat chat, String model,
                                                           List<Map<String, Object>> prompt,
+                                                          List<MessageSource> sources,
                                                           List<LlmProvider.Tool> tools) {
         UUID chatId = chat.getId();
         return Flux.defer(() -> {
@@ -386,8 +389,8 @@ public class ChatService {
                             return Flux.empty();
                         }
                         MessageView stored = registration.stopped()
-                                ? persistStopped(chat, model, answer.toString())
-                                : persistAnswer(chat, model, answer.toString(), finalChunk.get(), startedAt);
+                                ? persistStopped(chat, model, answer.toString(), sources)
+                                : persistAnswer(chat, model, answer.toString(), finalChunk.get(), startedAt, sources);
 
                         List<ServerSentEvent<ChatStreamEvent>> events = new ArrayList<>();
                         if (!registration.stopped() && !proposed.get().isEmpty()) {
@@ -410,7 +413,7 @@ public class ChatService {
                     // upstream, so the partial answer is written off the cancelling thread.
                     .doOnCancel(() -> Schedulers.boundedElastic().schedule(() -> {
                         if (saved.compareAndSet(false, true)) {
-                            persistStopped(chat, model, answer.toString());
+                            persistStopped(chat, model, answer.toString(), sources);
                             log.info("reply for chat {} stopped after {} characters", chatId, answer.length());
                         }
                     }))
@@ -419,7 +422,8 @@ public class ChatService {
     }
 
     private MessageView persistAnswer(Chat chat, String model, String content,
-                                      LlmProvider.Chunk finalChunk, long startedAtNanos) {
+                                      LlmProvider.Chunk finalChunk, long startedAtNanos,
+                                      List<MessageSource> sources) {
         int latencyMs = (int) ((System.nanoTime() - startedAtNanos) / 1_000_000);
         Integer promptTokens = finalChunk == null ? null : finalChunk.promptEvalCount();
         Integer completionTokens = finalChunk == null ? null : finalChunk.evalCount();
@@ -436,6 +440,7 @@ public class ChatService {
         message.setCompletionTokens(completionTokens);
         message.setLatencyMs(latencyMs);
         message.setTokensPerSec(rate);
+        message.setSources(sources == null ? List.of() : sources);
         Message stored = messages.save(message);
 
         log.info("assistant reply saved for chat {}: {} tokens at {} tok/s (ollama eval_duration {} ms, "
@@ -459,7 +464,8 @@ public class ChatService {
     }
 
     /** Keeps what was generated before the user pressed Stop, marked so it is not mistaken for a failure. */
-    private MessageView persistStopped(Chat chat, String model, String partial) {
+    private MessageView persistStopped(Chat chat, String model, String partial,
+                                       List<MessageSource> sources) {
         Message message = new Message();
         message.setChat(chat);
         message.setRole(MessageRole.ASSISTANT);
@@ -467,6 +473,7 @@ public class ChatService {
         message.setModel(model);
         message.setSeq(nextSeq(chat.getId()));
         message.setCancelled(true);
+        message.setSources(sources == null ? List.of() : sources);
         return MessageView.from(messages.save(message));
     }
 
@@ -492,15 +499,22 @@ public class ChatService {
      * chat's own system prompt so the user's instructions keep priority. Nothing indexed, nothing
      * relevant, or an embedding model that is down all leave the prompt exactly as it was.
      */
-    List<Map<String, Object>> withRetrieval(List<Map<String, Object>> prompt, String question) {
+    Retrieval withRetrieval(List<Map<String, Object>> prompt, String question) {
         return rag.contextFor(question)
                 .map(context -> {
                     List<Map<String, Object>> enriched = new ArrayList<>(prompt);
                     int at = !enriched.isEmpty() && "system".equals(enriched.getFirst().get("role")) ? 1 : 0;
-                    enriched.add(at, Map.of("role", "system", "content", context));
-                    return enriched;
+                    enriched.add(at, Map.of("role", "system", "content", context.text()));
+                    List<MessageSource> sources = context.snippets().stream()
+                            .map(snippet -> new MessageSource(snippet.path(), snippet.ordinal(), snippet.score()))
+                            .toList();
+                    return new Retrieval(enriched, sources);
                 })
-                .orElse(prompt);
+                .orElse(new Retrieval(prompt, List.of()));
+    }
+
+    /** A prompt for one turn, and the files retrieval contributed to it (recorded with the reply). */
+    record Retrieval(List<Map<String, Object>> prompt, List<MessageSource> sources) {
     }
 
     private ContextBudget.Window contextWindow(Chat chat) {
