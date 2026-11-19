@@ -1,0 +1,20 @@
+# Golden set for Locie's own retrieval. One case per line:
+#
+#     question <TAB> expected file (a path suffix, a full path or a file name)
+#
+# Blank lines and lines starting with # are ignored. Index the RAG package first, then run:
+#
+#   curl -X POST localhost:8080/api/rag/index -H 'Content-Type: application/json' \
+#        -d '{"path": "D:/locie/locie/src/main/java/com/localllm/locie/rag"}'
+#   curl "localhost:8080/api/rag/eval?path=rag-eval.example.txt"
+#
+# Keep this small and boring: every case should have one obviously correct file. A question with two
+# defensible answers measures retrieval noise, not retrieval.
+
+how are chunks split into overlapping windows?	rag/RagChunker.java
+where are passages ranked by cosine similarity?	rag/RagService.java
+which model turns text into embeddings?	rag/OllamaEmbedder.java
+what does the index endpoint return after a run?	rag/RagIndexResult.java
+how is an indexed file stored?	rag/RagDocument.java
+how are embedding floats stored in the database?	rag/RagChunk.java
+what fields does an indexed file show in the UI?	rag/RagDocumentView.java

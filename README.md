@@ -62,7 +62,7 @@ Everything runs on your machine. No cloud API keys, no model downloads beyond wh
 | **Search** | Matches chat titles *and* message content (trigram-indexed in Postgres) |
 | **Export** | Any conversation downloads as a Markdown transcript with its per-reply stats |
 | **Tool calling** | The model can propose one allowlisted command per turn; nothing runs until the user approves it, a proposal can be decided exactly once even under a double click, each outcome feeds exactly one continuation, and every proposal — approved, denied or rejected — is recorded |
-| **Local RAG** | Index a folder of notes/code: files are chunked, embedded with Ollama, stored in PostgreSQL, and the closest passages to each question are added to the prompt — unchanged files are skipped on re-index, files deleted or renamed on disk are dropped from the index, and every reply lists the files it drew on |
+| **Local RAG** | Index a folder of notes/code: files are chunked, embedded with Ollama, stored in PostgreSQL, and the closest passages to each question are added to the prompt — unchanged files are skipped on re-index, files deleted or renamed on disk are dropped from the index, and every reply lists the files it drew on — retrieval quality is measured against a golden set (recall@k, MRR) |
 | **Stop** | Interrupts generation and keeps what was produced, marked as stopped rather than lost; the UI aborts the stream and also calls a server-side stop so generation ends even if the browser stops listening |
 
 ---
@@ -376,6 +376,7 @@ Why it looks like this:
 | POST | `/api/rag/index` | Index a folder (`{"path": "D:\\notes"}`); unchanged files are skipped and deleted/renamed ones are removed |
 | DELETE | `/api/rag/documents/{id}` | Remove one file and its chunks from the index |
 | GET | `/api/rag/search?q=&limit=` | The passages a question would retrieve, with scores |
+| GET | `/api/rag/eval?path=&k=` | Grades retrieval against a golden set of `question<TAB>expected path` lines; returns recall@k, MRR and each question's rank |
 
 Errors are RFC 9457 `application/problem+json` (`status`, `title`, `detail`, `instance`), produced by
 `ApiExceptionHandler` from typed exceptions:
@@ -480,6 +481,16 @@ booting. A personal index is small (a folder of notes), so an exact scan is fast
 readable and testable. The column stays a text list of floats, so moving to `vector` + an HNSW
 index later is a migration, not a redesign.
 
+**Why does retrieval have an eval harness?** Because every retrieval change — chunk size, `min-score`,
+a reranker, a different embedding model — is otherwise argued from one or two remembered answers.
+`GET /api/rag/eval` runs a golden set through the same `RagService.search` the chat path uses and
+reports **recall@k** (did the right file appear at all) and **MRR** (how far down it was), so a change
+that trades one for the other is visible instead of guessed. The fixture is one `question<TAB>expected
+path` line per case rather than JSON: a Windows path is mostly backslashes that JSON would need
+escaped, and a line diff reads better in review. Expected files are matched as a path suffix in either
+separator style, so a golden set written on one machine still applies on another, and ranks are counted
+over distinct files so a second chunk from the same file cannot inflate a score.
+
 **Trade-offs accepted:** no pagination yet (fine for personal history, not for thousands of chats); the frontend
 has no state library (fine at this size, would need one if the UI grew another axis); no authentication (local
 tool); GPU utilisation on Windows is the busiest engine, not an average.
@@ -504,6 +515,8 @@ cd frontend && npm run lint    # oxlint
 | `ToolCallServiceTest` (13 tests) | A proposal stays pending until decided; an off-allowlist id or unknown tool name is recorded as failed; approval runs the command; deny never runs it; a decision is final; a raced second approve runs nothing; a proposal whose turn was rewound never runs; invalid arguments fail without a run; discard removes proposals and old orphans; an undecided proposal cannot continue, and a decided one only once |
 | `RagChunkerTest` (6 tests) | Blank text produces nothing, short text stays whole, windows never exceed the size, a paragraph boundary is preferred, consecutive chunks overlap, and an overlap larger than the window still terminates |
 | `RagServiceTest` (10 tests) | Indexing writes the document and its chunks while skipping ignored folders and binary files, an unchanged hash skips the embedder, re-indexing drops files that are gone from disk but leaves other folders alone, search ranks by cosine and caps chunks per document, low scores are dropped, the context block carries the source path, a failed embedding leaves the chat without retrieval, a missing folder is rejected, and deleting removes the chunks |
+| `RagEvaluatorTest` (8 tests) | A file at rank 1 scores 1.0 on recall@k and MRR, a miss is rank 0 with no path, MRR averages reciprocal ranks, ranks count distinct files rather than repeated passages, a file below `k` is a miss, and expected paths match by suffix in either separator style but never as a partial file name |
+| `RagEvalServiceTest` (7 tests) | A fixture is parsed with comments and blank lines skipped, every question is graded against real retrieval, an explicit `k` reaches the search, the configured fixture is the default, and a missing fixture, a line without a tab and an out-of-range `k` are rejected |
 | `ChatServiceTest` (5 tests) | Rewind and regenerate delete the proposals of the turns they remove (before the messages, so nothing is orphaned), regenerating with nothing to replace changes nothing, and retrieval is inserted after the system prompt with its passages carried for the reply's citations |
 | `CatalogToolRunnerTest` (6 tests) | The tool schema's enum is exactly the allowlist, destructive and argument-taking commands are described, and running rejects an unknown id or a flag-shaped argument |
 | `OllamaChatClientTest` (4 tests) | Tool calls parse whether Ollama sends arguments as an object or a JSON string; plain and counter-only frames still parse |
@@ -549,7 +562,34 @@ spring.datasource.password=choose-a-password
 ```
 
 Override anywhere with `DB_URL`, `DB_USER`, `DB_PASSWORD`, `OLLAMA_BASE_URL`, `CHAT_CONTEXT_TOKENS` (default
-4096) or `CHAT_HISTORY_LIMIT` (default 40).
+4096), `CHAT_HISTORY_LIMIT` (default 40) or `RAG_EVAL_FIXTURE` (the default golden set).
+
+### Measuring retrieval
+
+Index a folder, then grade retrieval against a golden set. `rag-eval.example.txt` scores Locie's own
+RAG package; copy it and rewrite the questions for your own notes:
+
+```bash
+curl -X POST localhost:8080/api/rag/index -H 'Content-Type: application/json' \
+     -d '{"path": "D:/locie/locie/src/main/java/com/localllm/locie/rag"}'
+curl "localhost:8080/api/rag/eval?path=rag-eval.example.txt"
+```
+
+```jsonc
+{ "k": 5, "total": 7, "hits": 6, "recallAtK": 0.857, "mrr": 0.762,
+  "cases": [ { "question": "how are chunks split into overlapping windows?",
+               "expected": "rag/RagChunker.java", "rank": 1,
+               "path": "D:\\locie\\locie\\src\\main\\java\\…\\rag\\RagChunker.java" } ] }
+```
+
+A `rank` of 0 is a file retrieval missed; the report keeps the question so the miss can be read
+without re-running anything. Run it before and after any retrieval change — that is what the two
+numbers are for.
+
+The numbers above are the recorded baseline for `rag-eval.example.txt` against this repo's `rag`
+package with `nomic-embed-text`: 6 of 7 files found in the top 5, MRR 0.762. The miss is
+`RagService.java` for *"where are passages ranked by cosine similarity?"* — the harness exists
+precisely so a miss like that is a number to improve rather than an anecdote.
 
 ### Start
 
@@ -610,6 +650,8 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
   yet).
 - Pruning only runs from the folder being re-indexed: deleting a folder from disk leaves its documents
   indexed until they are removed per file or the index is cleared.
+- Retrieval quality is measured by a hand-written golden set, not by a corpus-wide judgement: the
+  report is only as good as the fixture, and nothing fails the build when recall@k drops.
 - Tool calling depends on the model's chat template. `qwen2.5-coder:3b` (the only tools-capable model installed here)
   narrates the call as text instead of emitting `tool_calls`, so the loop was verified against a stub that returns
   Ollama's real wire shape. A model with working tool templates (`llama3.1`, `qwen2.5` 7B+) is needed for the model
@@ -633,6 +675,7 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 ```
 .
 ├── pom.xml                          Spring Boot 4, Java 25
+├── rag-eval.example.txt             golden set for the retrieval evaluator
 ├── src/main/java/com/localllm/locie/
 │   ├── LocieApplication.java
 │   ├── chat/                        Chat, Message, repositories, ChatService, SSE controller
@@ -641,7 +684,7 @@ between "fits in VRAM" and "partly on CPU" is two orders of magnitude.
 │   ├── system/                      SystemMetricsService, HealthController, MetricsController,
 │   │   └── gpu/                     CommandRunner, GpuProbe, GpuService, NvidiaSmiGpuProbe, WindowsGpuProbe
 │   ├── command/                     CommandCatalog, CommandService, CommandRunner glue, stream events
-│   ├── rag/                         RagService, RagChunker, OllamaEmbedder, /api/rag endpoints
+│   ├── rag/                         RagService, RagChunker, RagEvaluator, OllamaEmbedder, /api/rag endpoints
 │   └── common/                      typed exceptions, ApiExceptionHandler
 ├── src/main/resources/
 │   ├── application.properties

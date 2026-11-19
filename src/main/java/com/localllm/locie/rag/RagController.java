@@ -14,15 +14,17 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Index a folder, inspect what is indexed, and preview what a question would retrieve. */
+/** Index a folder, inspect what is indexed, preview what a question would retrieve and grade it. */
 @RestController
 @RequestMapping("/api/rag")
 public class RagController {
 
     private final RagService rag;
+    private final RagEvalService eval;
 
-    public RagController(RagService rag) {
+    public RagController(RagService rag, RagEvalService eval) {
         this.rag = rag;
+        this.eval = eval;
     }
 
     @GetMapping("/documents")
@@ -47,5 +49,15 @@ public class RagController {
     public List<RagSnippet> search(@RequestParam("q") String question,
                                    @RequestParam(name = "limit", defaultValue = "5") int limit) {
         return rag.search(question, limit);
+    }
+
+    /**
+     * Grades retrieval against a golden set of {@code question<TAB>expected path} lines and returns
+     * recall@k, MRR and each question's rank. See {@code rag-eval.example.txt}.
+     */
+    @GetMapping("/eval")
+    public RagEvalReport evaluate(@RequestParam(name = "path", required = false) String path,
+                                  @RequestParam(name = "k", required = false) Integer k) {
+        return eval.evaluate(path, k);
     }
 }
